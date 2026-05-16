@@ -32,7 +32,8 @@
             "msgBubbleMarginLeft": 20,
             "slideDirection": "right",
             "bubbleImages": [],
-            "customCSS": ""
+            "customCSS": "",
+            "fontFamilyOptions": []
         }
     },
     "presets": {
