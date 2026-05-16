@@ -1,0 +1,62 @@
+{
+    "config": {
+        "tuubaa": {
+            "fontSize": 18,
+            "textColor": "#000000",
+            "bubbleColor": "#efd699",
+            "bubbleOpacity": 0.882,
+            "bubbleImage": null,
+            "fontFamily": "",
+            "customFontName": null,
+            "customFontDataUrl": null,
+            "customFontUrl": null,
+            "nameBubbleMarginLeft": 8,
+            "nameBubbleMarginBottom": -12,
+            "msgBubbleMarginLeft": 20,
+            "slideDirection": "right",
+            "bubbleImages": [],
+            "customCSS": ""
+        },
+        "basti_wood": {
+            "fontSize": 18,
+            "textColor": "#000000",
+            "bubbleColor": "#efd699",
+            "bubbleOpacity": 0.882,
+            "bubbleImage": null,
+            "fontFamily": "",
+            "customFontName": null,
+            "customFontDataUrl": null,
+            "customFontUrl": null,
+            "nameBubbleMarginLeft": 8,
+            "nameBubbleMarginBottom": -12,
+            "msgBubbleMarginLeft": 20,
+            "slideDirection": "right",
+            "bubbleImages": [],
+            "customCSS": ""
+        }
+    },
+    "presets": {
+        "basti_wood": [
+            {
+                "name": "comic",
+                "config": {
+                    "fontSize": 18,
+                    "textColor": "#000000",
+                    "bubbleColor": "#efd699",
+                    "bubbleOpacity": 0.882,
+                    "bubbleImage": null,
+                    "fontFamily": "'Comic Sans MS', cursive",
+                    "customFontName": null,
+                    "customFontDataUrl": null,
+                    "customFontUrl": null,
+                    "nameBubbleMarginLeft": 8,
+                    "nameBubbleMarginBottom": -12,
+                    "msgBubbleMarginLeft": 20,
+                    "slideDirection": "left",
+                    "bubbleImages": [],
+                    "customCSS": ""
+                }
+            }
+        ]
+    }
+}

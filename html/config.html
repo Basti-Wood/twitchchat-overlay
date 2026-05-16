@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Overlay — Config</title>
+    <link rel="stylesheet" href="../css/stylesheet.css">
+</head>
+<body class="config-page">
+
+    <!-- ── Top bar ── -->
+    <div class="topbar">
+        <div class="topbar-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M11.64 5.93h1.43v4.28h-1.43m3.93-4.28H17v4.28h-1.43M7 2L3.43 5.57v12.86h4.28V22l3.58-3.57h2.85L20.57 12V2m-1.43 9.29-2.85 2.85h-2.86l-2.5 2.5v-2.5H7.71V3.43h11.43z"/>
+            </svg>
+            Twitch Chat Overlay
+        </div>
+        <button class="btn-copy" id="copy-btn" onclick="copyLink()">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2"/>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            Copy Overlay Link
+        </button>
+        <button class="btn-copy btn-save" id="save-btn" onclick="saveConfigToFile()">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                <polyline points="17 21 17 13 7 13 7 21"/>
+                <polyline points="7 3 7 8 15 8"/>
+            </svg>
+            Save Config
+        </button>
+    </div>
+
+    <!-- ── Main ── -->
+    <div class="config-main">
+
+        <!-- Left: settings -->
+        <aside class="config-panel">
+            <div>
+                <div class="config-section-title">Connection</div>
+
+                <div class="config-field">
+                    <label for="channel-input">Channel Name</label>
+                    <input type="text" id="channel-input" placeholder="yourchannelname"
+                           autocomplete="off" spellcheck="false">
+                </div>
+
+                <div class="config-field">
+                    <label for="token-input">
+                        OAuth Token <span class="badge-optional"></span>
+                    </label>
+                    <input type="password" id="token-input" placeholder="oauth:xxxxxxxxxx"
+                           autocomplete="off" spellcheck="false">
+                    <span class="hint">
+                        Needed for subscriber &amp; bits badges.<br>
+                        Get one at <a href="https://twitchtokengenerator.com/" target="_blank">twitchtokengenerator.com</a>
+                    </span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Center: preview (live iframe of chat.html) -->
+        <div class="config-preview">
+            <span class="preview-label">Preview</span>
+            <iframe id="preview-frame" class="preview-frame" src="chat.html" title="Chat preview"></iframe>
+        </div>
+
+        <!-- Right: style config -->
+        <aside class="config-panel config-panel--right">
+
+            <div class="panel-tabs">
+                <button class="panel-tab active" data-tab="style">Style</button>
+                <button class="panel-tab" data-tab="css">CSS</button>
+                <button class="panel-tab" data-tab="presets">Presets</button>
+            </div>
+
+            <!-- ── Style tab ── -->
+            <div class="panel-tab-content" id="tab-style">
+
+            <div class="config-section">
+                <div class="config-section-title">Typography</div>
+
+                <div class="config-field">
+                    <label for="cfg-font-family">Font Family</label>
+                    <select id="cfg-font-family">
+                        <option value="">Default (stylesheet)</option>
+                        <option value="Arial, sans-serif">Arial</option>
+                        <option value="'Helvetica Neue', Helvetica, sans-serif">Helvetica</option>
+                        <option value="Georgia, serif">Georgia</option>
+                        <option value="'Times New Roman', Times, serif">Times New Roman</option>
+                        <option value="'Courier New', Courier, monospace">Courier New</option>
+                        <option value="Verdana, sans-serif">Verdana</option>
+                        <option value="'Trebuchet MS', sans-serif">Trebuchet MS</option>
+                        <option value="'Comic Sans MS', cursive">Comic Sans MS</option>
+                        <option value="Impact, fantasy">Impact</option>
+                        <option value="'Segoe UI', sans-serif">Segoe UI</option>
+                        <option value="__custom__">Custom (uploaded) ↓</option>
+                    </select>
+                    <span class="hint">More fonts: <a href="https://fonts.google.com" target="_blank">fonts.google.com</a> (download .ttf)</span>
+                </div>
+
+                <div class="config-field">
+                    <label>Custom Font File</label>
+                    <label class="file-label" for="cfg-font-upload">Upload font file</label>
+                    <input type="file" id="cfg-font-upload" accept=".ttf,.otf,.woff,.woff2">
+                    <span class="hint" id="cfg-font-label">No font loaded</span>
+                </div>
+
+                <div class="config-field">
+                    <label for="cfg-font-size">Font Size (px)</label>
+                    <input type="number" id="cfg-font-size" min="10" max="72" value="18">
+                </div>
+
+                <div class="config-field">
+                    <label for="cfg-text-color">Text Color</label>
+                    <input type="color" id="cfg-text-color" value="#000000">
+                </div>
+            </div>
+
+            <div class="config-section">
+                <div class="config-section-title">Message Bubble</div>
+
+                <div class="config-field">
+                    <label for="cfg-bubble-color">Bubble Color</label>
+                    <input type="color" id="cfg-bubble-color" value="#efd699">
+                </div>
+
+                <div class="config-field">
+                    <label for="cfg-bubble-opacity">Opacity</label>
+                    <div class="range-row">
+                        <input type="range" id="cfg-bubble-opacity" min="0" max="1" step="0.01" value="0.882">
+                        <span class="range-val" id="cfg-opacity-val">0.88</span>
+                    </div>
+                </div>
+
+                <div class="config-field">
+                    <label>Background Images</label>
+                    <label class="file-label" for="cfg-bubble-image">+ Add image(s)</label>
+                    <input type="file" id="cfg-bubble-image" accept="image/*" multiple>
+                    <span class="hint">Each chat message picks one at random.</span>
+                    <div class="img-gallery" id="cfg-img-gallery"></div>
+                </div>
+            </div>
+
+            <div class="config-section">
+                <div class="config-section-title">Animation</div>
+
+                <div class="config-field">
+                    <label for="cfg-slide-dir">Slide-in Direction</label>
+                    <select id="cfg-slide-dir">
+                        <option value="right">From the right →</option>
+                        <option value="left">← From the left</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="config-section">
+                <div class="config-section-title">Layout</div>
+
+                <div class="config-field">
+                    <label for="cfg-name-ml">Name bubble indent (px)</label>
+                    <input type="number" id="cfg-name-ml" value="8">
+                </div>
+
+                <div class="config-field">
+                    <label for="cfg-name-mb">Name bubble overlap (px)</label>
+                    <input type="number" id="cfg-name-mb" value="-12">
+                </div>
+
+                <div class="config-field">
+                    <label for="cfg-msg-ml">Message indent (px)</label>
+                    <input type="number" id="cfg-msg-ml" value="20">
+                </div>
+            </div>
+
+                <button class="btn-reset" id="cfg-reset">↺ Reset to defaults</button>
+
+            </div><!-- /tab-style -->
+
+            <!-- ── CSS tab ── -->
+            <div class="panel-tab-content" id="tab-css" style="display:none">
+                <div class="config-section">
+                    <div class="config-section-title">CSS Editor</div>
+                    <textarea id="cfg-css-editor" class="css-editor" spellcheck="false"
+                        placeholder="/* Loading CSS… */"></textarea>
+                    <button class="btn-small" id="cfg-css-apply">&#9654; Apply</button>
+                </div>
+            </div><!-- /tab-css -->
+
+            <!-- ── Presets tab ── -->
+            <div class="panel-tab-content" id="tab-presets" style="display:none">
+                <div class="config-section">
+                    <div class="config-section-title">Save Current Style</div>
+                    <div class="config-field">
+                        <label for="cfg-preset-name">Preset name</label>
+                        <input type="text" id="cfg-preset-name" placeholder="e.g. Dark theme…" autocomplete="off">
+                        <button class="btn-small" id="cfg-preset-save">Save preset</button>
+                    </div>
+                </div>
+                <div class="config-section">
+                    <div class="config-section-title">Saved Presets</div>
+                    <div id="cfg-preset-list" class="preset-list"></div>
+                </div>
+            </div><!-- /tab-presets -->
+
+        </aside>
+
+    </div>
+
+    <script src="../src/config.js" defer></script>
+
+</body>
+</html>
