@@ -2,7 +2,7 @@ const http = require('http');
 const fs   = require('fs');
 const path = require('path');
 
-const PORT = 8080;
+const PORT = Number(process.env.PORT) || 8080;
 const ROOT = __dirname;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -184,7 +184,7 @@ server.on('error', (e) => {
     process.exit(1);
 });
 
-server.listen(PORT, '127.0.0.1', () => {
+server.listen(PORT, '0.0.0.0', () => {
     console.log('');
     console.log('  Twitch Chat Overlay server started');
     console.log('  ──────────────────────────────────────────────────');
