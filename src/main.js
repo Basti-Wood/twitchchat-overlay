@@ -101,7 +101,14 @@ function parseIRC(raw) {
         pos = space + 1;
     }
 
-    if (raw[pos] === ':') pos = raw.indexOf(' ', pos) + 1;
+    let prefixLogin = '';
+    if (raw[pos] === ':') {
+        const spaceIdx = raw.indexOf(' ', pos);
+        const prefix = raw.slice(pos + 1, spaceIdx); // e.g. "user!user@user.tmi.twitch.tv"
+        const bangIdx = prefix.indexOf('!');
+        if (bangIdx !== -1) prefixLogin = prefix.slice(0, bangIdx).toLowerCase();
+        pos = spaceIdx + 1;
+    }
 
     const cmdEnd = raw.indexOf(' ', pos);
     const command = raw.slice(pos, cmdEnd);
@@ -130,7 +137,7 @@ function parseIRC(raw) {
     return {
         type:   'message',
         id:     tags['id']           || '',
-        login:  tags['login']        || '',
+        login:  prefixLogin,
         nick:   tags['display-name'] || 'unknown',
         color:  tags['color']        || '#9146FF',
         badges: parseBadges(tags['badges']),
