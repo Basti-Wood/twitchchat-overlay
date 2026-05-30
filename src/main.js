@@ -111,6 +111,16 @@ function parseIRC(raw) {
         return { type: 'roomstate', roomId: tags['room-id'] || '' };
     }
 
+    if (command === 'CLEARMSG') {
+        return { type: 'clearmsg', targetMsgId: tags['target-msg-id'] || '' };
+    }
+
+    if (command === 'CLEARCHAT') {
+        const colonIdx = raw.indexOf(':', pos);
+        const targetUser = colonIdx !== -1 ? raw.slice(colonIdx + 1).trim() : null;
+        return { type: 'clearchat', targetUser: targetUser || null };
+    }
+
     if (command !== 'PRIVMSG') return null;
 
     const colonIdx = raw.indexOf(':', pos);
@@ -118,7 +128,9 @@ function parseIRC(raw) {
     const text = raw.slice(colonIdx + 1);
 
     return {
-        type: 'message',
+        type:   'message',
+        id:     tags['id']           || '',
+        login:  tags['login']        || '',
         nick:   tags['display-name'] || 'unknown',
         color:  tags['color']        || '#9146FF',
         badges: parseBadges(tags['badges']),
@@ -333,9 +345,28 @@ function renderMessage(text, twitchEmotes) {
     return frag;
 }
 
+function deleteMessage(targetMsgId) {
+    if (!targetMsgId) return;
+    const el = chatContainer.querySelector(`[data-msg-id="${CSS.escape(targetMsgId)}"]`);
+    if (el) el.remove();
+}
+
+function clearUserMessages(loginName) {
+    if (!loginName) {
+        // Full /clear — wipe everything
+        while (chatContainer.firstChild) chatContainer.removeChild(chatContainer.firstChild);
+        return;
+    }
+    chatContainer
+        .querySelectorAll(`[data-user="${CSS.escape(loginName.toLowerCase())}"]`)
+        .forEach(el => el.remove());
+}
+
 function addMessage(msg) {
     const row = document.createElement('div');
     row.className = `chat-message slide-in-${overlaySlideDirection}`;
+    if (msg.id)    row.dataset.msgId = msg.id;
+    if (msg.login) row.dataset.user  = msg.login.toLowerCase();
 
     const usernameRow = document.createElement('div');
     usernameRow.className = 'username-row';
@@ -522,6 +553,10 @@ function connect() {
                 ]);
             } else if (parsed.type === 'message') {
                 addMessage(parsed);
+            } else if (parsed.type === 'clearmsg') {
+                deleteMessage(parsed.targetMsgId);
+            } else if (parsed.type === 'clearchat') {
+                clearUserMessages(parsed.targetUser);
             }
         });
     };

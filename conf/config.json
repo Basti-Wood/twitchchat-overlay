@@ -15,7 +15,8 @@
             "msgBubbleMarginLeft": 20,
             "slideDirection": "right",
             "bubbleImages": [],
-            "customCSS": ""
+            "customCSS": "",
+            "fontFamilyOptions": []
         },
         "basti_wood": {
             "fontSize": 18,
@@ -56,6 +57,29 @@
                     "slideDirection": "left",
                     "bubbleImages": [],
                     "customCSS": ""
+                }
+            }
+        ],
+        "tuubaa": [
+            {
+                "name": "standart",
+                "config": {
+                    "fontSize": 18,
+                    "textColor": "#000000",
+                    "bubbleColor": "#efd699",
+                    "bubbleOpacity": 0.882,
+                    "bubbleImage": null,
+                    "fontFamily": "",
+                    "customFontName": null,
+                    "customFontDataUrl": null,
+                    "customFontUrl": null,
+                    "nameBubbleMarginLeft": 8,
+                    "nameBubbleMarginBottom": -12,
+                    "msgBubbleMarginLeft": 20,
+                    "slideDirection": "right",
+                    "bubbleImages": [],
+                    "customCSS": "",
+                    "fontFamilyOptions": []
                 }
             }
         ]
