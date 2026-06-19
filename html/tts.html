@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TTS Overlay</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body {
+            background: transparent;
+            overflow: hidden;
+            width: 100%;
+            height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        /* The stage fills the browser source; the alert is positioned inside it. */
+        #tts-stage {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            padding: 24px;
+        }
+        /* Position variants (set via ?pos= or config) */
+        #tts-stage.pos-top-left     { align-items: flex-start; justify-content: flex-start; }
+        #tts-stage.pos-top-center   { align-items: flex-start; justify-content: center; }
+        #tts-stage.pos-top-right    { align-items: flex-start; justify-content: flex-end; }
+        #tts-stage.pos-center       { align-items: center;     justify-content: center; }
+        #tts-stage.pos-bottom-left  { align-items: flex-end;   justify-content: flex-start; }
+        #tts-stage.pos-bottom-center{ align-items: flex-end;   justify-content: center; }
+        #tts-stage.pos-bottom-right { align-items: flex-end;   justify-content: flex-end; }
+
+        .tts-alert {
+            --accent: #9146ff;
+            --bg: rgba(20, 16, 40, 0.92);
+            --text: #ffffff;
+            --radius: 16px;
+            max-width: 540px;
+            min-width: 280px;
+            background: var(--bg);
+            color: var(--text);
+            border-radius: var(--radius);
+            border-left: 6px solid var(--accent);
+            box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+            padding: 18px 22px;
+            opacity: 0;
+            transform: translateY(16px) scale(0.98);
+            transition: opacity 0.35s ease, transform 0.35s cubic-bezier(.2,.9,.3,1.2);
+        }
+        .tts-alert.show { opacity: 1; transform: translateY(0) scale(1); }
+
+        .tts-alert-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+        .tts-alert-icon {
+            width: 34px; height: 34px;
+            flex: 0 0 34px;
+            border-radius: 50%;
+            background: var(--accent);
+            display: flex; align-items: center; justify-content: center;
+            color: #fff;
+        }
+        .tts-alert-icon svg { width: 20px; height: 20px; }
+        .tts-alert-title {
+            font-weight: 700;
+            font-size: 1.05em;
+            line-height: 1.2;
+        }
+        .tts-alert-title .who { color: var(--accent); }
+        .tts-alert-sub {
+            font-size: 0.78em;
+            opacity: 0.7;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        .tts-alert-body {
+            font-size: 1.0em;
+            line-height: 1.45;
+            word-wrap: break-word;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div id="tts-stage" class="pos-bottom-center"></div>
+    <script src="../src/tts-overlay-page.js?v=3" defer></script>
+</body>
+</html>

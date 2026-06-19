@@ -74,6 +74,7 @@
                 <button class="panel-tab active" data-tab="style">Style</button>
                 <button class="panel-tab" data-tab="css">CSS</button>
                 <button class="panel-tab" data-tab="presets">Presets</button>
+                <button class="panel-tab" data-tab="tts">TTS</button>
             </div>
 
             <!-- ── Style tab ── -->
@@ -204,6 +205,262 @@
                     <div id="cfg-preset-list" class="preset-list"></div>
                 </div>
             </div><!-- /tab-presets -->
+
+            <!-- ── TTS tab ── -->
+            <div class="panel-tab-content" id="tab-tts" style="display:none">
+
+                <!-- Sub-tabs: Customize | Queue -->
+                <div class="tts-subtabs">
+                    <button type="button" class="tts-subtab active" data-subtab="customize">Customize</button>
+                    <button type="button" class="tts-subtab" data-subtab="queue">Queue</button>
+                </div>
+
+                <!-- ========================= CUSTOMIZE ========================= -->
+                <div class="tts-subtab-content" id="tts-sub-customize">
+
+                    <div class="config-section">
+                        <div class="config-section-title">OBS Overlay</div>
+                        <button class="btn-copy" id="tts-copy-link" style="width:100%;justify-content:center">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="9" y="9" width="13" height="13" rx="2"/>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                            </svg>
+                            Copy Overlay Link
+                        </button>
+                        <span class="hint" style="margin-top:8px">Add this URL as a Browser Source in OBS. It shows the alert box and plays the TTS audio.</span>
+                    </div>
+
+                    <div class="config-section">
+                        <div class="config-section-title">Preview</div>
+                        <div class="tts-preview-stage" id="tts-preview-stage">
+                            <div class="tts-alert show" id="tts-preview-alert">
+                                <div class="tts-alert-head">
+                                    <div class="tts-alert-icon" id="tts-preview-icon"></div>
+                                    <div>
+                                        <div class="tts-alert-title"><span class="who">Basti</span> cheered 100 bits</div>
+                                        <div class="tts-alert-sub">Bits</div>
+                                    </div>
+                                </div>
+                                <div class="tts-alert-body">This is what your TTS alert box looks like!</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <div class="config-section-title">Appearance</div>
+
+                        <div class="config-field">
+                            <label for="tts-ap-position">Position</label>
+                            <select id="tts-ap-position">
+                                <option value="top-left">Top left</option>
+                                <option value="top-center">Top center</option>
+                                <option value="top-right">Top right</option>
+                                <option value="center">Center</option>
+                                <option value="bottom-left">Bottom left</option>
+                                <option value="bottom-center">Bottom center</option>
+                                <option value="bottom-right">Bottom right</option>
+                            </select>
+                        </div>
+
+                        <div class="config-field">
+                            <label for="tts-ap-accent">Accent color</label>
+                            <input type="color" id="tts-ap-accent" value="#9146ff">
+                        </div>
+
+                        <div class="config-field">
+                            <label for="tts-ap-bg">Background color</label>
+                            <input type="color" id="tts-ap-bg" value="#141028">
+                        </div>
+
+                        <div class="config-field">
+                            <label for="tts-ap-bg-opacity">Background opacity</label>
+                            <div class="range-row">
+                                <input type="range" id="tts-ap-bg-opacity" min="0" max="1" step="0.01" value="0.92">
+                                <span class="range-val" id="tts-ap-bg-opacity-val">0.92</span>
+                            </div>
+                        </div>
+
+                        <div class="config-field">
+                            <label for="tts-ap-text">Text color</label>
+                            <input type="color" id="tts-ap-text" value="#ffffff">
+                        </div>
+
+                        <div class="config-field">
+                            <label for="tts-ap-fontsize">Font size (px)</label>
+                            <input type="number" id="tts-ap-fontsize" min="10" max="48" value="18">
+                        </div>
+
+                        <div class="config-field">
+                            <label for="tts-ap-radius">Corner radius (px)</label>
+                            <input type="number" id="tts-ap-radius" min="0" max="40" value="16">
+                        </div>
+
+                        <div class="config-field">
+                            <label for="tts-ap-duration">Alert display time (seconds)</label>
+                            <input type="number" id="tts-ap-duration" min="0" max="60" step="0.5" value="0">
+                            <span class="hint">0 = stay visible until the audio finishes.</span>
+                        </div>
+
+                        <div class="config-field">
+                            <label><input type="checkbox" id="tts-ap-showicon" checked> Show icon</label>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <div class="config-section-title">Status</div>
+                        <div id="tts-status" class="hint">Checking…</div>
+                        <button class="btn-small" id="tts-connect-btn" style="margin-top:8px">Connect Twitch (EventSub)</button>
+                        <button class="btn-small" id="tts-reconnect-btn" style="margin-top:8px">⟳ Reconnect EventSub</button>
+                        <button class="btn-small" id="tts-refresh-btn" style="margin-top:8px">↻ Refresh status</button>
+                    </div>
+
+                    <div class="config-section">
+                        <div class="config-section-title">Global</div>
+
+                        <div class="config-field">
+                            <label for="tts-default-voice">Default Voice</label>
+                            <select id="tts-default-voice"><option value="">(first available)</option></select>
+                            <span class="hint">Used when a message has no <code>{Voice}</code> tag.</span>
+                        </div>
+
+                        <div class="config-field">
+                            <label for="tts-gap">Gap between clips (seconds)</label>
+                            <input type="number" id="tts-gap" min="0" max="60" step="0.5" value="4">
+                            <span class="hint">Minimum pause after one clip ends before the next plays.</span>
+                        </div>
+
+                        <div class="config-field">
+                            <label for="tts-maxchars">Max characters per message</label>
+                            <input type="number" id="tts-maxchars" min="20" max="1000" value="300">
+                        </div>
+
+                        <div class="config-field">
+                            <label for="tts-model">ElevenLabs Model</label>
+                            <select id="tts-model">
+                                <option value="eleven_multilingual_v2">Multilingual v2</option>
+                                <option value="eleven_turbo_v2_5">Turbo v2.5</option>
+                                <option value="eleven_flash_v2_5">Flash v2.5</option>
+                                <option value="eleven_monolingual_v1">Monolingual v1</option>
+                            </select>
+                        </div>
+
+                        <div class="config-field">
+                            <label for="tts-language-default">Default language</label>
+                            <select id="tts-language-default">
+                                <option value="de">German (de)</option>
+                                <option value="en">English (en)</option>
+                            </select>
+                            <span class="hint">Default is German. Keep auto-detect off if you want German consistently.</span>
+                        </div>
+
+                        <div class="config-field">
+                            <label><input type="checkbox" id="tts-language-autodetect"> Auto-detect language from message text</label>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <div class="config-section-title">Bits (cheer)</div>
+                        <div class="config-field">
+                            <label><input type="checkbox" id="tts-bits-enabled"> Read bits aloud</label>
+                        </div>
+                        <div class="config-field">
+                            <label for="tts-bits-min">Minimum bits</label>
+                            <input type="number" id="tts-bits-min" min="0" value="100">
+                        </div>
+                        <div class="config-field">
+                            <label for="tts-bits-voice">Voice</label>
+                            <select id="tts-bits-voice"><option value="">(default voice)</option></select>
+                        </div>
+                        <div class="config-field">
+                            <label for="tts-bits-template">Spoken template</label>
+                            <input type="text" id="tts-bits-template" placeholder="{user} cheered {amount} bits: {message}">
+                            <span class="hint">Vars: <code>{user} {amount} {message}</code>. Empty = sensible default.</span>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <div class="config-section-title">Resubs</div>
+                        <div class="config-field">
+                            <label><input type="checkbox" id="tts-resub-enabled"> Read resubs aloud</label>
+                        </div>
+                        <div class="config-field">
+                            <label for="tts-resub-mintier">Minimum tier</label>
+                            <select id="tts-resub-mintier">
+                                <option value="1">Tier 1+</option>
+                                <option value="2">Tier 2+</option>
+                                <option value="3">Tier 3 only</option>
+                            </select>
+                        </div>
+                        <div class="config-field">
+                            <label for="tts-resub-voice">Voice</label>
+                            <select id="tts-resub-voice"><option value="">(default voice)</option></select>
+                        </div>
+                        <div class="config-field">
+                            <label for="tts-resub-template">Spoken template</label>
+                            <input type="text" id="tts-resub-template" placeholder="{user} resubscribed for {amount} months: {message}">
+                            <span class="hint">Vars: <code>{user} {amount} {tier} {message}</code></span>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <div class="config-section-title">Channel Point Redeem</div>
+                        <div class="config-field">
+                            <label><input type="checkbox" id="tts-redeem-enabled"> Read redeems aloud</label>
+                        </div>
+                        <div class="config-field">
+                            <label for="tts-redeem-title">Only this reward title (optional)</label>
+                            <input type="text" id="tts-redeem-title" placeholder="e.g. TTS Message (blank = any reward)">
+                            <span class="hint">Match the exact reward name from your channel points.</span>
+                        </div>
+                        <div class="config-field">
+                            <label for="tts-redeem-id">Reward ID (optional, most reliable)</label>
+                            <input type="text" id="tts-redeem-id" placeholder="e.g. 12345678-aabb-... (overrides title)">
+                            <span class="hint">If set, only this exact reward fires TTS — wins over the title above. Find it via the &ldquo;Find reward IDs&rdquo; button below.</span>
+                            <button type="button" class="btn-small" id="tts-redeem-list-btn" style="margin-top:8px">Find reward IDs</button>
+                            <div class="tts-reward-list" id="tts-reward-list"></div>
+                        </div>
+                        <div class="config-field">
+                            <label for="tts-redeem-voice">Voice</label>
+                            <select id="tts-redeem-voice"><option value="">(default voice)</option></select>
+                        </div>
+                        <div class="config-field">
+                            <label for="tts-redeem-template">Spoken template</label>
+                            <input type="text" id="tts-redeem-template" placeholder="{message}">
+                            <span class="hint">Vars: <code>{user} {reward} {message}</code>. Often just <code>{message}</code>.</span>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <div class="config-section-title">Test</div>
+                        <div class="config-field">
+                            <label for="tts-test-text">Say something (use <code>{VoiceName}</code> to pick a voice)</label>
+                            <input type="text" id="tts-test-text" placeholder="{Adam} Hallo, das ist ein Test!">
+                            <button type="button" class="btn-small" id="tts-test-btn" style="margin-top:8px">Send single redeem test</button>
+                            <button type="button" class="btn-small" id="tts-test-redeems-btn" style="margin-top:8px">Send redeem test set</button>
+                            <span class="hint" id="tts-test-result"></span>
+                        </div>
+                        <div class="config-field">
+                            <span class="hint">Tests are queued as redeems. Open the redeem overlay page (tts.html) to see the redeem card and hear audio.</span>
+                        </div>
+                    </div>
+
+                </div><!-- /tts-sub-customize -->
+
+                <!-- =========================== QUEUE =========================== -->
+                <div class="tts-subtab-content" id="tts-sub-queue" style="display:none">
+                    <div class="config-section">
+                        <div class="config-section-title">
+                            TTS Requests
+                            <button type="button" class="btn-small" id="tts-queue-refresh" style="float:right">↻</button>
+                        </div>
+                        <span class="hint">Live feed of incoming bits, resubs, and redeems. Newest at the top.</span>
+                        <div class="tts-queue-list" id="tts-queue-list">
+                            <div class="tts-queue-empty" id="tts-queue-empty">No requests yet.</div>
+                        </div>
+                    </div>
+                </div><!-- /tts-sub-queue -->
+
+            </div><!-- /tab-tts -->
 
         </aside>
 

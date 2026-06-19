@@ -662,3 +662,176 @@ body.config-page {
     margin-top: 15px;
     font-size: 14px;
 }
+
+/* ── TTS tab: sub-tabs ───────────────────────── */
+/* When the TTS tab is active, hide the middle chat preview and let the right
+   panel expand to fill the space — prevents the panel from jumping sideways. */
+body.tts-active .config-preview { display: none; }
+body.tts-active .config-panel--right { flex: 1; }
+
+.tts-subtabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid #2a1f50;
+    padding-bottom: 12px;
+    margin-bottom: 4px;
+    flex-shrink: 0;
+}
+.tts-subtab {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: #6a5a8a;
+    padding: 6px 14px;
+    font-size: 0.83em;
+    font-family: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.tts-subtab:hover { color: #b8a8d8; }
+.tts-subtab.active {
+    color: #c9b4ff;
+    border-color: #9146ff;
+    background: rgba(145, 70, 255, 0.12);
+}
+.tts-subtab-content {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+}
+
+/* ── Reward ID finder list ──────────────────── */
+.tts-reward-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 10px;
+}
+.tts-reward-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    background: #0e0b1a;
+    border: 1px solid #2a1f50;
+    border-radius: 6px;
+    padding: 7px 10px;
+}
+.tts-reward-row .name { font-size: 0.85em; color: #d8d0e8; }
+.tts-reward-row .pick {
+    background: transparent;
+    border: 1px solid #3a2060;
+    border-radius: 5px;
+    color: #9146ff;
+    padding: 3px 9px;
+    font-size: 0.78em;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.tts-reward-row .pick:hover { border-color: #9146ff; background: #1e1640; }
+
+/* ── TTS alert box (shared by overlay + config preview) ──── */
+.tts-alert {
+    --accent: #9146ff;
+    --bg: rgba(20, 16, 40, 0.92);
+    --text: #ffffff;
+    --radius: 16px;
+    max-width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    border-radius: var(--radius);
+    border-left: 6px solid var(--accent);
+    box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+    padding: 16px 18px;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+.tts-alert-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.tts-alert-icon {
+    width: 32px; height: 32px; flex: 0 0 32px;
+    border-radius: 50%;
+    background: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff;
+}
+.tts-alert-icon svg { width: 19px; height: 19px; }
+.tts-alert-title { font-weight: 700; font-size: 1.02em; line-height: 1.2; color: var(--text); }
+.tts-alert-title .who { color: var(--accent); }
+.tts-alert-sub {
+    font-size: 0.72em; opacity: 0.7;
+    text-transform: uppercase; letter-spacing: 0.08em; color: var(--text);
+}
+.tts-alert-body { font-size: 0.98em; line-height: 1.45; word-wrap: break-word; white-space: pre-wrap; color: var(--text); }
+
+/* Preview frame in the config page */
+.tts-preview-stage {
+    background:
+        linear-gradient(45deg, #1a1530 25%, transparent 25%),
+        linear-gradient(-45deg, #1a1530 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #1a1530 75%),
+        linear-gradient(-45deg, transparent 75%, #1a1530 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+    background-color: #0f0c1e;
+    border: 1px solid #2a1f50;
+    border-radius: 10px;
+    padding: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 120px;
+}
+
+/* ── TTS Queue list ───────────────────────── */
+.tts-queue-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 12px;
+}
+.tts-queue-empty {
+    color: #6a5a8a;
+    font-size: 0.85em;
+    text-align: center;
+    padding: 24px 0;
+}
+.tts-queue-item {
+    background: #0e0b1a;
+    border: 1px solid #2a1f50;
+    border-left: 3px solid #6a5a8a;
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    animation: ttsQueueIn 0.25s ease-out;
+}
+@keyframes ttsQueueIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+.tts-queue-item.status-playing { border-left-color: #9146ff; background: #18123a; }
+.tts-queue-item.status-done    { border-left-color: #2ecc71; opacity: 0.7; }
+.tts-queue-item.status-queued  { border-left-color: #e0a93a; }
+.tts-queue-item.status-error   { border-left-color: #e05a5a; }
+.tts-queue-item-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.tts-queue-who { font-weight: 700; color: #c9b4ff; font-size: 0.9em; }
+.tts-queue-badge {
+    font-size: 0.68em; text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 2px 7px; border-radius: 10px; font-weight: 700;
+    background: rgba(145,70,255,0.18); color: #c9b4ff;
+}
+.tts-queue-badge.kind-bits   { background: rgba(145,70,255,0.18); color: #c9b4ff; }
+.tts-queue-badge.kind-resub  { background: rgba(46,204,113,0.18); color: #7fe0a6; }
+.tts-queue-badge.kind-redeem { background: rgba(224,169,58,0.18); color: #f0c87a; }
+.tts-queue-badge.kind-manual { background: rgba(120,120,140,0.2); color: #b8b8c8; }
+.tts-queue-text { font-size: 0.88em; color: #d8d0e8; line-height: 1.4; word-wrap: break-word; }
+.tts-queue-meta { font-size: 0.72em; color: #6a5a8a; display: flex; gap: 10px; }
+.tts-queue-status-dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px;
+}
+.status-queued  .tts-queue-status-dot { background: #e0a93a; }
+.status-playing .tts-queue-status-dot { background: #9146ff; animation: pulse 1s infinite; }
+.status-done    .tts-queue-status-dot { background: #2ecc71; }
+.status-error   .tts-queue-status-dot { background: #e05a5a; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }

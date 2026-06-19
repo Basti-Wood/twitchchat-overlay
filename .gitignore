@@ -1,2 +1,5 @@
 conf/accounts.json
 /conf
+.env
+conf/tokens.json
+uploads/tts/

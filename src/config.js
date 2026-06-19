@@ -737,44 +737,556 @@ function copyLink() {
     });
 }
 
-// Dynamically fetch uploaded fonts and add them to the dropdown menu
-function fetchUploadedFonts() {
-    const fontDir = 'uploads/fonts/';
-    const fontFiles = [];
+// Note: keep browser code free of Node-only APIs (like fs). The font picker
+// uses file uploads handled by /api/upload/font, so no local dir scan here.
 
-    // Simulate fetching font files dynamically (this would be replaced with actual file fetching logic)
-    try {
-        const files = fs.readdirSync(fontDir); // Use Node.js to read the directory
-        files.forEach(file => {
-            if (file.endsWith('.ttf') || file.endsWith('.otf')) {
-                const fontName = file.replace(/\.[^.]+$/, ''); // Remove file extension
-                fontFiles.push({ name: fontName, url: `${fontDir}${file}` });
-            }
-        });
-    } catch (error) {
-        console.error('Error fetching fonts:', error);
-    }
+// ═══════════════════════════════════════════════════════════════════════════
+//  TTS tab logic
+//  Two sub-tabs: "Customize" (overlay look + triggers + test + copy link) and
+//  "Queue" (live feed of incoming requests). The TTS settings live in a
+//  TOP-LEVEL "tts" key of conf/config.json (the server reads config.tts).
+// ═══════════════════════════════════════════════════════════════════════════
 
-    return fontFiles;
+const TTS_DEFAULTS = {
+    defaultVoice:    '',
+    gapSeconds:      4,
+    maxChars:        300,
+    maxClipSeconds:  30,
+    modelId:         'eleven_multilingual_v2',
+    language:        { default: 'de', autoDetect: false },
+    stability:       0.5,
+    similarityBoost: 0.75,
+    bits:    { enabled: false, minBits: 100, voice: '', template: '' },
+    resubs:  { enabled: false, minTier: 1,   voice: '', template: '' },
+    redeems: { enabled: false, rewardTitle: '', rewardId: '', voice: '', template: '' },
+    appearance: {
+        position: 'bottom-center',
+        accent:   '#9146ff',
+        bg:       'rgba(20, 16, 40, 0.92)',
+        text:     '#ffffff',
+        fontSize: 18,
+        radius:   16,
+        duration: 0,
+        showIcon: true,
+    },
+};
+
+let ttsConfig = JSON.parse(JSON.stringify(TTS_DEFAULTS));
+let ttsVoices = [];
+
+function ttsEl(id) { return document.getElementById(id); }
+
+// ── rgba <-> hex helpers (color inputs need hex; we store bg as rgba) ────────
+function ttsRgbaToHex(rgba) {
+    if (!rgba) return '#141028';
+    if (rgba[0] === '#') return rgba.slice(0, 7);
+    const m = rgba.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+    if (!m) return '#141028';
+    const h = n => Number(n).toString(16).padStart(2, '0');
+    return '#' + h(m[1]) + h(m[2]) + h(m[3]);
+}
+function ttsRgbaAlpha(rgba) {
+    if (!rgba) return 0.92;
+    const m = String(rgba).match(/rgba?\([^)]*,\s*([\d.]+)\s*\)/i);
+    return m ? parseFloat(m[1]) : 1;
+}
+function ttsHexToRgba(hex, alpha) {
+    const h = hex.replace('#', '');
+    const r = parseInt(h.slice(0, 2), 16) || 0;
+    const g = parseInt(h.slice(2, 4), 16) || 0;
+    const b = parseInt(h.slice(4, 6), 16) || 0;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-// Function to update the font dropdown menu dynamically
-function updateFontDropdown() {
-    const dropdown = document.getElementById('font-dropdown');
-    if (!dropdown) return;
+// ── Load / save the whole config.json, merging the `tts` block ───────────────
+async function ttsLoadConfig() {
+    try {
+        const res = await fetch('../conf/config.json?_=' + Date.now());
+        if (res.ok) {
+            const data = await res.json();
+            if (data && data.tts) {
+                ttsConfig = {
+                    ...TTS_DEFAULTS, ...data.tts,
+                    bits:    { ...TTS_DEFAULTS.bits,    ...(data.tts.bits    || {}) },
+                    resubs:  { ...TTS_DEFAULTS.resubs,  ...(data.tts.resubs  || {}) },
+                    redeems: { ...TTS_DEFAULTS.redeems, ...(data.tts.redeems || {}) },
+                    language: { ...TTS_DEFAULTS.language, ...(data.tts.language || {}) },
+                    appearance: { ...TTS_DEFAULTS.appearance, ...(data.tts.appearance || {}) },
+                };
+            }
+        }
+    } catch (e) { console.warn('[tts-cfg] load failed:', e.message); }
+}
 
-    // Clear existing options
-    dropdown.innerHTML = '';
+async function ttsSaveConfig() {
+    let fileData = { config: {}, presets: {} };
+    try {
+        const res = await fetch('../conf/config.json?_=' + Date.now());
+        if (res.ok) fileData = await res.json();
+    } catch {}
+    if (!fileData.config)  fileData.config  = {};
+    if (!fileData.presets) fileData.presets = {};
+    fileData.tts = ttsConfig;
+    try {
+        const res = await fetch('/api/save-config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(fileData, null, 4),
+        });
+        const data = await res.json();
+        if (!data.ok) console.warn('[tts-cfg] save error:', data.error);
+        // tell any open overlays to re-read appearance
+        fetch('/api/tts/appearance/notify', { method: 'POST' }).catch(() => {});
+    } catch (e) { console.warn('[tts-cfg] save fetch failed:', e.message); }
+}
 
-    // Add dynamically fetched fonts
-    DEFAULT_CONFIG.fontFamilyOptions.forEach(font => {
-        const option = document.createElement('option');
-        option.value = font;
-        option.textContent = font;
-        dropdown.appendChild(option);
+// ── Voice dropdowns ──────────────────────────────────────────────────────────
+function ttsFillVoiceSelect(sel, includeDefaultOption) {
+    if (!sel) return;
+    const current = sel.value;
+    sel.innerHTML = '';
+    if (includeDefaultOption) {
+        const o = document.createElement('option');
+        o.value = ''; o.textContent = includeDefaultOption;
+        sel.appendChild(o);
+    }
+    ttsVoices.forEach(v => {
+        const o = document.createElement('option');
+        o.value = v.name;          // store by name so {Name} tags line up
+        o.textContent = v.name;
+        sel.appendChild(o);
+    });
+    sel.value = current;
+}
+
+async function ttsLoadVoices() {
+    try {
+        const res = await fetch('/api/tts/voices');
+        const data = await res.json();
+        ttsVoices = data.voices || [];
+    } catch (e) { console.warn('[tts-cfg] voices failed:', e.message); ttsVoices = []; }
+
+    ttsFillVoiceSelect(ttsEl('tts-default-voice'), '(first available)');
+    ttsFillVoiceSelect(ttsEl('tts-bits-voice'),    '(default voice)');
+    ttsFillVoiceSelect(ttsEl('tts-resub-voice'),   '(default voice)');
+    ttsFillVoiceSelect(ttsEl('tts-redeem-voice'),  '(default voice)');
+    ttsApplyToForm();
+}
+
+// ── Status panel ──────────────────────────────────────────────────────────────
+async function ttsRefreshStatus() {
+    const el = ttsEl('tts-status');
+    if (!el) return;
+    try {
+        const res = await fetch('/api/tts/status');
+        const s = await res.json();
+        const bits = [];
+        bits.push(s.elevenConfigured ? '✓ ElevenLabs key' : '✗ No ElevenLabs key (.env)');
+        bits.push(s.twitchConfigured ? '✓ Twitch app creds' : '✗ No Twitch creds (.env)');
+        if (s.twitchClientIdPrefix) bits.push(`Client ID: ${s.twitchClientIdPrefix}`);
+        if (s.redirectUri) bits.push(`Redirect URI: ${s.redirectUri}`);
+        bits.push(s.authorized ? `✓ Authorized as ${s.login}` : '✗ Not authorized');
+        bits.push(s.eventSubOnline ? '✓ EventSub online' : '✗ EventSub offline');
+        bits.push(`${s.voiceCount} voices · queue ${s.queueLength}${s.playing ? ' · playing' : ''}`);
+        el.innerHTML = bits.join('<br>');
+        const btn = ttsEl('tts-connect-btn');
+        if (btn) btn.textContent = s.authorized ? 'Re-connect Twitch (EventSub)' : 'Connect Twitch (EventSub)';
+    } catch (e) {
+        el.textContent = 'Status unavailable — is the server running?';
+    }
+}
+
+// ── Form <-> ttsConfig ──────────────────────────────────────────────────────
+function ttsApplyToForm() {
+    const c = ttsConfig;
+    if (ttsEl('tts-default-voice')) ttsEl('tts-default-voice').value = c.defaultVoice || '';
+    if (ttsEl('tts-gap'))           ttsEl('tts-gap').value           = c.gapSeconds;
+    if (ttsEl('tts-maxchars'))      ttsEl('tts-maxchars').value      = c.maxChars;
+    if (ttsEl('tts-model'))         ttsEl('tts-model').value         = c.modelId;
+    if (ttsEl('tts-language-default')) ttsEl('tts-language-default').value = (c.language && c.language.default) || 'de';
+    if (ttsEl('tts-language-autodetect')) ttsEl('tts-language-autodetect').checked = !c.language || c.language.autoDetect !== false;
+
+    ttsEl('tts-bits-enabled').checked  = !!c.bits.enabled;
+    ttsEl('tts-bits-min').value        = c.bits.minBits;
+    ttsEl('tts-bits-voice').value      = c.bits.voice || '';
+    ttsEl('tts-bits-template').value   = c.bits.template || '';
+
+    ttsEl('tts-resub-enabled').checked = !!c.resubs.enabled;
+    ttsEl('tts-resub-mintier').value   = String(c.resubs.minTier || 1);
+    ttsEl('tts-resub-voice').value     = c.resubs.voice || '';
+    ttsEl('tts-resub-template').value  = c.resubs.template || '';
+
+    ttsEl('tts-redeem-enabled').checked = !!c.redeems.enabled;
+    ttsEl('tts-redeem-title').value     = c.redeems.rewardTitle || '';
+    ttsEl('tts-redeem-id').value        = c.redeems.rewardId || '';
+    ttsEl('tts-redeem-voice').value     = c.redeems.voice || '';
+    ttsEl('tts-redeem-template').value  = c.redeems.template || '';
+
+    // Appearance
+    const a = c.appearance || {};
+    if (ttsEl('tts-ap-position')) ttsEl('tts-ap-position').value = a.position || 'bottom-center';
+    if (ttsEl('tts-ap-accent'))   ttsEl('tts-ap-accent').value   = ttsRgbaToHex(a.accent || '#9146ff');
+    if (ttsEl('tts-ap-bg'))       ttsEl('tts-ap-bg').value       = ttsRgbaToHex(a.bg);
+    const alpha = ttsRgbaAlpha(a.bg);
+    if (ttsEl('tts-ap-bg-opacity')) {
+        ttsEl('tts-ap-bg-opacity').value = alpha;
+        if (ttsEl('tts-ap-bg-opacity-val')) ttsEl('tts-ap-bg-opacity-val').textContent = Number(alpha).toFixed(2);
+    }
+    if (ttsEl('tts-ap-text'))     ttsEl('tts-ap-text').value     = ttsRgbaToHex(a.text || '#ffffff');
+    if (ttsEl('tts-ap-fontsize')) ttsEl('tts-ap-fontsize').value = a.fontSize || 18;
+    if (ttsEl('tts-ap-radius'))   ttsEl('tts-ap-radius').value   = a.radius != null ? a.radius : 16;
+    if (ttsEl('tts-ap-duration')) ttsEl('tts-ap-duration').value = a.duration || 0;
+    if (ttsEl('tts-ap-showicon')) ttsEl('tts-ap-showicon').checked = a.showIcon !== false;
+
+    ttsRenderPreview();
+}
+
+function ttsReadFromForm() {
+    const c = ttsConfig;
+    c.defaultVoice = ttsEl('tts-default-voice').value;
+    c.gapSeconds   = parseFloat(ttsEl('tts-gap').value)   || 0;
+    c.maxChars     = parseInt(ttsEl('tts-maxchars').value) || 300;
+    c.modelId      = ttsEl('tts-model').value;
+    c.language     = {
+        default: (ttsEl('tts-language-default').value || 'de').toLowerCase(),
+        autoDetect: !!ttsEl('tts-language-autodetect').checked,
+    };
+
+    c.bits.enabled  = ttsEl('tts-bits-enabled').checked;
+    c.bits.minBits  = parseInt(ttsEl('tts-bits-min').value) || 0;
+    c.bits.voice    = ttsEl('tts-bits-voice').value;
+    c.bits.template = ttsEl('tts-bits-template').value;
+
+    c.resubs.enabled  = ttsEl('tts-resub-enabled').checked;
+    c.resubs.minTier  = parseInt(ttsEl('tts-resub-mintier').value) || 1;
+    c.resubs.voice    = ttsEl('tts-resub-voice').value;
+    c.resubs.template = ttsEl('tts-resub-template').value;
+
+    c.redeems.enabled     = ttsEl('tts-redeem-enabled').checked;
+    c.redeems.rewardTitle = ttsEl('tts-redeem-title').value;
+    c.redeems.rewardId    = ttsEl('tts-redeem-id').value.trim();
+    c.redeems.voice       = ttsEl('tts-redeem-voice').value;
+    c.redeems.template    = ttsEl('tts-redeem-template').value;
+
+    // Appearance
+    const alpha = parseFloat(ttsEl('tts-ap-bg-opacity').value);
+    c.appearance = {
+        position: ttsEl('tts-ap-position').value,
+        accent:   ttsEl('tts-ap-accent').value,
+        bg:       ttsHexToRgba(ttsEl('tts-ap-bg').value, isNaN(alpha) ? 0.92 : alpha),
+        text:     ttsEl('tts-ap-text').value,
+        fontSize: parseInt(ttsEl('tts-ap-fontsize').value) || 18,
+        radius:   parseInt(ttsEl('tts-ap-radius').value) || 0,
+        duration: parseFloat(ttsEl('tts-ap-duration').value) || 0,
+        showIcon: ttsEl('tts-ap-showicon').checked,
+    };
+    if (ttsEl('tts-ap-bg-opacity-val')) ttsEl('tts-ap-bg-opacity-val').textContent = (isNaN(alpha)?0.92:alpha).toFixed(2);
+}
+
+// ── Live preview of the alert box ─────────────────────────────────────────────
+const TTS_PREVIEW_ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 4 7v10l8 5 8-5V7l-8-5zm0 2.3L17.5 8 12 11.7 6.5 8 12 4.3z"/></svg>';
+function ttsRenderPreview() {
+    const a = ttsConfig.appearance || {};
+    const alert = ttsEl('tts-preview-alert');
+    const stage = ttsEl('tts-preview-stage');
+    if (!alert || !stage) return;
+    alert.style.setProperty('--accent', a.accent || '#9146ff');
+    alert.style.setProperty('--bg', a.bg || 'rgba(20,16,40,0.92)');
+    alert.style.setProperty('--text', a.text || '#ffffff');
+    alert.style.setProperty('--radius', (a.radius != null ? a.radius : 16) + 'px');
+    alert.style.fontSize = (a.fontSize || 18) + 'px';
+    const pos = a.position || 'bottom-center';
+    stage.style.justifyContent = pos.includes('left') ? 'flex-start' : pos.includes('right') ? 'flex-end' : 'center';
+    const icon = ttsEl('tts-preview-icon');
+    if (icon) {
+        icon.style.display = (a.showIcon === false) ? 'none' : '';
+        icon.innerHTML = TTS_PREVIEW_ICON;
+    }
+}
+
+// Debounced save
+let _ttsSaveTimer = null;
+function ttsScheduleSave() {
+    ttsReadFromForm();
+    ttsRenderPreview();
+    clearTimeout(_ttsSaveTimer);
+    _ttsSaveTimer = setTimeout(ttsSaveConfig, 600);
+}
+
+// ── Copy overlay link (points to tts.html) ───────────────────────────────────
+function ttsCopyOverlayLink() {
+    const url = new URL('tts.html', window.location.href);
+    navigator.clipboard.writeText(url.toString()).then(() => {
+        const btn = ttsEl('tts-copy-link');
+        if (!btn) return;
+        const original = btn.innerHTML;
+        btn.classList.add('copied');
+        btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Copied!`;
+        setTimeout(() => { btn.classList.remove('copied'); btn.innerHTML = original; }, 2000);
+    }).catch(() => {
+        alert('Could not copy — here is the overlay URL:\n\n' + url.toString());
     });
 }
 
-// Call updateFontDropdown after fetching fonts
-DEFAULT_CONFIG.fontFamilyOptions = fetchUploadedFonts().map(font => font.name);
-updateFontDropdown();
+// ── Queue view ────────────────────────────────────────────────────────────────
+const TTS_KIND_LABEL = { bits: 'Bits', resub: 'Resub', redeem: 'Redeem', manual: 'Test' };
+function ttsEscape(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+function ttsTimeAgo(ts) {
+    const d = Date.now() - ts;
+    if (d < 60000) return Math.max(1, Math.floor(d/1000)) + 's ago';
+    if (d < 3600000) return Math.floor(d/60000) + 'm ago';
+    return Math.floor(d/3600000) + 'h ago';
+}
+function ttsQueueItemHtml(it) {
+    const kind = it.kind || 'manual';
+    return `
+        <div class="tts-queue-item status-${it.status || 'queued'}" data-id="${it.id}">
+            <div class="tts-queue-item-head">
+                <span class="tts-queue-who">${ttsEscape(it.user || 'Someone')}</span>
+                <span class="tts-queue-badge kind-${kind}">${TTS_KIND_LABEL[kind] || kind}</span>
+            </div>
+            <div class="tts-queue-text">${ttsEscape(it.spoken)}</div>
+            <div class="tts-queue-meta">
+                <span><span class="tts-queue-status-dot"></span>${it.status || 'queued'}</span>
+                <span>${ttsEscape(it.voiceName || '')}</span>
+                <span>${ttsTimeAgo(it.ts || Date.now())}</span>
+            </div>
+        </div>`;
+}
+function ttsRenderQueue(list) {
+    const wrap = ttsEl('tts-queue-list');
+    const empty = ttsEl('tts-queue-empty');
+    if (!wrap) return;
+    if (!list.length) {
+        wrap.innerHTML = '<div class="tts-queue-empty" id="tts-queue-empty">No requests yet.</div>';
+        return;
+    }
+    if (empty) empty.remove();
+    wrap.innerHTML = list.map(ttsQueueItemHtml).join('');
+}
+async function ttsLoadQueue() {
+    try {
+        const res = await fetch('/api/tts/queue');
+        const data = await res.json();
+        ttsRenderQueue(data.requests || []);
+    } catch (e) { console.warn('[tts-cfg] queue load failed:', e.message); }
+}
+// Apply a live queue event (add or status update) without a full reload.
+function ttsApplyQueueEvent(action, item) {
+    const wrap = ttsEl('tts-queue-list');
+    if (!wrap) return;
+    const empty = ttsEl('tts-queue-empty');
+    if (empty) empty.remove();
+    const existing = wrap.querySelector(`.tts-queue-item[data-id="${item.id}"]`);
+    if (existing) {
+        existing.outerHTML = ttsQueueItemHtml(item);
+    } else if (action === 'add') {
+        wrap.insertAdjacentHTML('afterbegin', ttsQueueItemHtml(item));
+        const items = wrap.querySelectorAll('.tts-queue-item');
+        if (items.length > 60) items[items.length - 1].remove();
+    }
+}
+
+// ── SSE for the config page (queue feed only; no audio here) ─────────────────
+let _ttsCfgSSE = null;
+
+function ttsConnectSSE() {
+    if (_ttsCfgSSE) return;
+    try {
+        _ttsCfgSSE = new EventSource('/api/tts/stream');
+        _ttsCfgSSE.onmessage = (ev) => {
+            let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+            if (msg.type === 'queue' && msg.item) ttsApplyQueueEvent(msg.action, msg.item);
+        };
+        _ttsCfgSSE.onerror = () => { /* auto-reconnects */ };
+    } catch (e) { console.warn('[tts-cfg] SSE failed:', e.message); }
+}
+
+// ── Sub-tab switching + hiding the center chat preview on the TTS tab ────────
+function ttsShowSubtab(name) {
+    document.querySelectorAll('.tts-subtab').forEach(b => b.classList.toggle('active', b.dataset.subtab === name));
+    const cust = ttsEl('tts-sub-customize');
+    const queue = ttsEl('tts-sub-queue');
+    if (cust)  cust.style.display  = (name === 'customize') ? 'flex' : 'none';
+    if (queue) queue.style.display = (name === 'queue') ? 'flex' : 'none';
+    if (name === 'queue') ttsLoadQueue();
+}
+
+// Show/hide the center preview column depending on the active right-panel tab.
+function ttsUpdateCenterPreview() {
+    const previewCol = document.querySelector('.config-preview');
+    // Keep layout stable when switching to TTS; do not collapse the middle pane.
+    if (previewCol) previewCol.style.display = '';
+}
+
+function ttsWireControls() {
+    const ids = [
+        'tts-default-voice', 'tts-gap', 'tts-maxchars', 'tts-model', 'tts-language-default', 'tts-language-autodetect',
+        'tts-bits-enabled', 'tts-bits-min', 'tts-bits-voice', 'tts-bits-template',
+        'tts-resub-enabled', 'tts-resub-mintier', 'tts-resub-voice', 'tts-resub-template',
+        'tts-redeem-enabled', 'tts-redeem-title', 'tts-redeem-id', 'tts-redeem-voice', 'tts-redeem-template',
+        'tts-ap-position', 'tts-ap-accent', 'tts-ap-bg', 'tts-ap-bg-opacity',
+        'tts-ap-text', 'tts-ap-fontsize', 'tts-ap-radius', 'tts-ap-duration', 'tts-ap-showicon',
+    ];
+    ids.forEach(id => {
+        const el = ttsEl(id);
+        if (!el) return;
+        el.addEventListener('input', ttsScheduleSave);
+        if (el.tagName === 'SELECT' || el.type === 'checkbox') el.addEventListener('change', ttsScheduleSave);
+    });
+
+    const connectBtn = ttsEl('tts-connect-btn');
+    if (connectBtn) connectBtn.addEventListener('click', () => {
+        window.open('/api/tts/oauth/start', '_blank', 'width=600,height=800');
+    });
+    const reconnectBtn = ttsEl('tts-reconnect-btn');
+    if (reconnectBtn) reconnectBtn.addEventListener('click', async () => {
+        reconnectBtn.textContent = '⟳ Connecting…';
+        reconnectBtn.disabled = true;
+        try {
+            const res = await fetch('/api/tts/eventsub/connect', { method: 'POST' });
+            const data = await res.json();
+            reconnectBtn.textContent = data.ok ? '⟳ Reconnect EventSub' : '✗ ' + data.error;
+            if (data.ok) setTimeout(ttsRefreshStatus, 3000);
+        } catch (e) {
+            reconnectBtn.textContent = '✗ Failed';
+        } finally {
+            setTimeout(() => { reconnectBtn.textContent = '⟳ Reconnect EventSub'; reconnectBtn.disabled = false; }, 4000);
+        }
+    });
+    const refreshBtn = ttsEl('tts-refresh-btn');
+    if (refreshBtn) refreshBtn.addEventListener('click', ttsRefreshStatus);
+
+    const copyBtn = ttsEl('tts-copy-link');
+    if (copyBtn) copyBtn.addEventListener('click', ttsCopyOverlayLink);
+
+    const queueRefresh = ttsEl('tts-queue-refresh');
+    if (queueRefresh) queueRefresh.addEventListener('click', ttsLoadQueue);
+
+    document.querySelectorAll('.tts-subtab').forEach(btn => {
+        btn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ttsShowSubtab(btn.dataset.subtab);
+        });
+    });
+
+    // Hook the existing right-panel tab buttons to toggle the center preview.
+    document.querySelectorAll('.panel-tab[data-tab]').forEach(btn => {
+        btn.addEventListener('click', () => setTimeout(ttsUpdateCenterPreview, 0));
+    });
+
+    const testBtn = ttsEl('tts-test-btn');
+    if (testBtn) testBtn.addEventListener('click', async () => {
+        const result = ttsEl('tts-test-result');
+        const text = ttsEl('tts-test-text').value.trim();
+        if (!text) { result.textContent = 'Enter some text first.'; return; }
+        const stored = sessionStorage.getItem('account');
+        if (!stored) { result.textContent = 'Not logged in — log in first.'; return; }
+        const acc = JSON.parse(stored);
+        result.textContent = 'Sending…';
+        try {
+            // First, show how the voice tag resolves so a mismatch is obvious.
+            let voiceInfo = '';
+            try {
+                const r = await fetch('/api/tts/voices/resolve?text=' + encodeURIComponent(text));
+                const rd = await r.json();
+                voiceInfo = ` — voice: ${rd.voiceName || '(default)'}`;
+            } catch {}
+            const res = await fetch('/api/tts/test', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: acc.username,
+                    password: acc.password,
+                    text,
+                    kind: 'redeem',
+                    reward: 'Test Redeem',
+                }),
+            });
+            const data = await res.json();
+            if (data.ok) result.textContent = `Queued redeem ✓ (queue ${data.queueLength})${voiceInfo}. Audio plays on the overlay page.`;
+            else         result.textContent = 'Error: ' + (data.error || res.status);
+        } catch (e) { result.textContent = 'Failed: ' + e.message; }
+    });
+
+    const testRedeemsBtn = ttsEl('tts-test-redeems-btn');
+    if (testRedeemsBtn) testRedeemsBtn.addEventListener('click', async () => {
+        const result = ttsEl('tts-test-result');
+        const stored = sessionStorage.getItem('account');
+        if (!stored) { result.textContent = 'Not logged in - log in first.'; return; }
+        const acc = JSON.parse(stored);
+        result.textContent = 'Sending test redeems...';
+        try {
+            const res = await fetch('/api/tts/test-redeems', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: acc.username, password: acc.password }),
+            });
+            const data = await res.json();
+            if (data.ok) result.textContent = `Queued ${data.added} redeem tests ✓ (queue length ${data.queueLength}). Audio plays on the redeem overlay page.`;
+            else         result.textContent = 'Error: ' + (data.error || res.status);
+        } catch (e) { result.textContent = 'Failed: ' + e.message; }
+    });
+
+    const rewardListBtn = ttsEl('tts-redeem-list-btn');
+    if (rewardListBtn) rewardListBtn.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        const wrap = ttsEl('tts-reward-list');
+        if (!wrap) return;
+        wrap.innerHTML = '<div class="hint">Loading rewards...</div>';
+        try {
+            const res = await fetch('/api/tts/rewards');
+            const data = await res.json();
+            if (!res.ok || !data.ok) {
+                wrap.innerHTML = `<div class="hint">${ttsEscape(data.error || ('Error ' + res.status))}</div>`;
+                return;
+            }
+            const rewards = data.rewards || [];
+            if (!rewards.length) {
+                wrap.innerHTML = '<div class="hint">No custom rewards found.</div>';
+                return;
+            }
+            wrap.innerHTML = '';
+            rewards.forEach(r => {
+                const row = document.createElement('div');
+                row.className = 'tts-reward-row';
+
+                const name = document.createElement('span');
+                name.className = 'name';
+                name.textContent = `${r.title} (${r.id})`;
+
+                const pick = document.createElement('button');
+                pick.className = 'pick';
+                pick.textContent = 'Use ID';
+                pick.type = 'button';
+                pick.addEventListener('click', () => {
+                    if (ttsEl('tts-redeem-id')) ttsEl('tts-redeem-id').value = r.id;
+                    if (ttsEl('tts-redeem-title')) ttsEl('tts-redeem-title').value = r.title || '';
+                    ttsScheduleSave();
+                });
+
+                row.appendChild(name);
+                row.appendChild(pick);
+                wrap.appendChild(row);
+            });
+        } catch (e) {
+            wrap.innerHTML = `<div class="hint">Failed: ${ttsEscape(e.message)}</div>`;
+        }
+    });
+}
+
+// ── Init the TTS tab once the DOM is ready ───────────────────────────────────
+document.addEventListener('DOMContentLoaded', async () => {
+    if (!ttsEl('tab-tts')) return;
+    await ttsLoadConfig();
+    ttsApplyToForm();
+    ttsWireControls();
+    ttsShowSubtab('customize');
+    ttsUpdateCenterPreview();
+    await ttsLoadVoices();
+    ttsRefreshStatus();
+    setInterval(ttsRefreshStatus, 10000);
+    ttsConnectSSE();
+});
