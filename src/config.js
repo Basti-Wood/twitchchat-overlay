@@ -753,12 +753,13 @@ const TTS_DEFAULTS = {
     maxChars:        300,
     maxClipSeconds:  30,
     modelId:         'eleven_multilingual_v2',
-    language:        { default: 'de', autoDetect: false },
+    language:        { default: 'de', autoDetect: true },
     stability:       0.5,
     similarityBoost: 0.75,
     bits:    { enabled: false, minBits: 100, voice: '', template: '' },
     resubs:  { enabled: false, minTier: 1,   voice: '', template: '' },
     redeems: { enabled: false, rewardTitle: '', rewardId: '', voice: '', template: '' },
+    gifs:    { enabled: true, bits: [], resubs: [], redeems: [] },
     appearance: {
         position: 'bottom-center',
         accent:   '#9146ff',
@@ -775,6 +776,23 @@ let ttsConfig = JSON.parse(JSON.stringify(TTS_DEFAULTS));
 let ttsVoices = [];
 
 function ttsEl(id) { return document.getElementById(id); }
+
+// ── Per-user: every account edits its OWN channel's TTS config ───────────────
+function ttsChannelKey() {
+    try {
+        const stored = sessionStorage.getItem('account');
+        if (!stored) return null;
+        const { channel } = JSON.parse(stored);
+        return channel ? String(channel).toLowerCase() : null;
+    } catch { return null; }
+}
+
+/** Append ?channel=<key> to a TTS API path. */
+function ttsApi(path) {
+    const key = ttsChannelKey();
+    if (!key) return path;
+    return path + (path.includes('?') ? '&' : '?') + 'channel=' + encodeURIComponent(key);
+}
 
 // ── rgba <-> hex helpers (color inputs need hex; we store bg as rgba) ────────
 function ttsRgbaToHex(rgba) {
@@ -799,19 +817,31 @@ function ttsHexToRgba(hex, alpha) {
 }
 
 // ── Load / save the whole config.json, merging the `tts` block ───────────────
+// TTS settings are stored PER CHANNEL: config.tts[<channel>] = { ... }.
+function ttsIsFlatLegacy(tts) {
+    return !!(tts && (tts.bits || tts.appearance || tts.defaultVoice !== undefined));
+}
+
 async function ttsLoadConfig() {
+    const key = ttsChannelKey();
     try {
         const res = await fetch('../conf/config.json?_=' + Date.now());
         if (res.ok) {
             const data = await res.json();
+            let mine = null;
             if (data && data.tts) {
+                if (key && data.tts[key] && !ttsIsFlatLegacy(data.tts)) mine = data.tts[key];
+                else if (ttsIsFlatLegacy(data.tts)) mine = data.tts; // legacy flat (server migrates on boot)
+            }
+            if (mine) {
                 ttsConfig = {
-                    ...TTS_DEFAULTS, ...data.tts,
-                    bits:    { ...TTS_DEFAULTS.bits,    ...(data.tts.bits    || {}) },
-                    resubs:  { ...TTS_DEFAULTS.resubs,  ...(data.tts.resubs  || {}) },
-                    redeems: { ...TTS_DEFAULTS.redeems, ...(data.tts.redeems || {}) },
-                    language: { ...TTS_DEFAULTS.language, ...(data.tts.language || {}) },
-                    appearance: { ...TTS_DEFAULTS.appearance, ...(data.tts.appearance || {}) },
+                    ...TTS_DEFAULTS, ...mine,
+                    bits:    { ...TTS_DEFAULTS.bits,    ...(mine.bits    || {}) },
+                    resubs:  { ...TTS_DEFAULTS.resubs,  ...(mine.resubs  || {}) },
+                    redeems: { ...TTS_DEFAULTS.redeems, ...(mine.redeems || {}) },
+                    gifs:    { ...TTS_DEFAULTS.gifs,    ...(mine.gifs    || {}) },
+                    language: { ...TTS_DEFAULTS.language, ...(mine.language || {}) },
+                    appearance: { ...TTS_DEFAULTS.appearance, ...(mine.appearance || {}) },
                 };
             }
         }
@@ -819,6 +849,8 @@ async function ttsLoadConfig() {
 }
 
 async function ttsSaveConfig() {
+    const key = ttsChannelKey();
+    if (!key) { console.warn('[tts-cfg] no channel in session — cannot save'); return; }
     let fileData = { config: {}, presets: {} };
     try {
         const res = await fetch('../conf/config.json?_=' + Date.now());
@@ -826,7 +858,9 @@ async function ttsSaveConfig() {
     } catch {}
     if (!fileData.config)  fileData.config  = {};
     if (!fileData.presets) fileData.presets = {};
-    fileData.tts = ttsConfig;
+    // Preserve other channels' TTS settings; replace only our own block.
+    if (!fileData.tts || ttsIsFlatLegacy(fileData.tts)) fileData.tts = {};
+    fileData.tts[key] = ttsConfig;
     try {
         const res = await fetch('/api/save-config', {
             method: 'POST',
@@ -835,8 +869,8 @@ async function ttsSaveConfig() {
         });
         const data = await res.json();
         if (!data.ok) console.warn('[tts-cfg] save error:', data.error);
-        // tell any open overlays to re-read appearance
-        fetch('/api/tts/appearance/notify', { method: 'POST' }).catch(() => {});
+        // tell any open overlays of THIS channel to re-read appearance
+        fetch(ttsApi('/api/tts/appearance/notify'), { method: 'POST' }).catch(() => {});
     } catch (e) { console.warn('[tts-cfg] save fetch failed:', e.message); }
 }
 
@@ -878,7 +912,7 @@ async function ttsRefreshStatus() {
     const el = ttsEl('tts-status');
     if (!el) return;
     try {
-        const res = await fetch('/api/tts/status');
+        const res = await fetch(ttsApi('/api/tts/status'));
         const s = await res.json();
         const bits = [];
         bits.push(s.elevenConfigured ? '✓ ElevenLabs key' : '✗ No ElevenLabs key (.env)');
@@ -921,6 +955,10 @@ function ttsApplyToForm() {
     ttsEl('tts-redeem-id').value        = c.redeems.rewardId || '';
     ttsEl('tts-redeem-voice').value     = c.redeems.voice || '';
     ttsEl('tts-redeem-template').value  = c.redeems.template || '';
+
+    // GIFs
+    if (ttsEl('tts-gifs-enabled')) ttsEl('tts-gifs-enabled').checked = !c.gifs || c.gifs.enabled !== false;
+    ttsRenderGifGalleries();
 
     // Appearance
     const a = c.appearance || {};
@@ -967,6 +1005,9 @@ function ttsReadFromForm() {
     c.redeems.rewardId    = ttsEl('tts-redeem-id').value.trim();
     c.redeems.voice       = ttsEl('tts-redeem-voice').value;
     c.redeems.template    = ttsEl('tts-redeem-template').value;
+
+    if (!c.gifs) c.gifs = { enabled: true, bits: [], resubs: [], redeems: [] };
+    if (ttsEl('tts-gifs-enabled')) c.gifs.enabled = ttsEl('tts-gifs-enabled').checked;
 
     // Appearance
     const alpha = parseFloat(ttsEl('tts-ap-bg-opacity').value);
@@ -1016,6 +1057,8 @@ function ttsScheduleSave() {
 // ── Copy overlay link (points to tts.html) ───────────────────────────────────
 function ttsCopyOverlayLink() {
     const url = new URL('tts.html', window.location.href);
+    const key = ttsChannelKey();
+    if (key) url.searchParams.set('channel', key);
     navigator.clipboard.writeText(url.toString()).then(() => {
         const btn = ttsEl('tts-copy-link');
         if (!btn) return;
@@ -1068,7 +1111,7 @@ function ttsRenderQueue(list) {
 }
 async function ttsLoadQueue() {
     try {
-        const res = await fetch('/api/tts/queue');
+        const res = await fetch(ttsApi('/api/tts/queue'));
         const data = await res.json();
         ttsRenderQueue(data.requests || []);
     } catch (e) { console.warn('[tts-cfg] queue load failed:', e.message); }
@@ -1095,7 +1138,7 @@ let _ttsCfgSSE = null;
 function ttsConnectSSE() {
     if (_ttsCfgSSE) return;
     try {
-        _ttsCfgSSE = new EventSource('/api/tts/stream');
+        _ttsCfgSSE = new EventSource(ttsApi('/api/tts/stream'));
         _ttsCfgSSE.onmessage = (ev) => {
             let msg; try { msg = JSON.parse(ev.data); } catch { return; }
             if (msg.type === 'queue' && msg.item) ttsApplyQueueEvent(msg.action, msg.item);
@@ -1121,9 +1164,88 @@ function ttsUpdateCenterPreview() {
     if (previewCol) previewCol.style.display = '';
 }
 
+// ── Alert GIFs: a list per event type; the overlay picks one at random ───────
+const TTS_GIF_EVENTS = ['bits', 'resubs', 'redeems'];
+
+function ttsRenderGifGalleries() {
+    TTS_GIF_EVENTS.forEach(ev => {
+        const gallery = ttsEl(`tts-gif-${ev}-gallery`);
+        if (!gallery) return;
+        const list = (ttsConfig.gifs && ttsConfig.gifs[ev]) || [];
+        gallery.innerHTML = '';
+        if (!list.length) {
+            gallery.innerHTML = '<span class="hint">No GIFs yet.</span>';
+            return;
+        }
+        list.forEach((url, idx) => {
+            const thumb = document.createElement('div');
+            thumb.className = 'img-thumb';
+            const img = document.createElement('img');
+            img.src = url;
+            const btn = document.createElement('button');
+            btn.className = 'img-thumb-remove';
+            btn.textContent = '✕';
+            btn.title = 'Remove GIF';
+            btn.addEventListener('click', async () => {
+                ttsConfig.gifs[ev].splice(idx, 1);
+                ttsRenderGifGalleries();
+                ttsSaveConfig();
+                if (url && url.startsWith('/uploads/images/')) {
+                    try {
+                        await fetch('/api/delete/image', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ url }),
+                        });
+                    } catch {}
+                }
+            });
+            thumb.appendChild(img);
+            thumb.appendChild(btn);
+            gallery.appendChild(thumb);
+        });
+    });
+}
+
+function ttsWireGifUploads() {
+    TTS_GIF_EVENTS.forEach(ev => {
+        const input = ttsEl(`tts-gif-${ev}-upload`);
+        if (!input) return;
+        input.addEventListener('change', async e => {
+            const files = Array.from(e.target.files);
+            if (!files.length) return;
+            if (!ttsConfig.gifs) ttsConfig.gifs = { enabled: true, bits: [], resubs: [], redeems: [] };
+            if (!Array.isArray(ttsConfig.gifs[ev])) ttsConfig.gifs[ev] = [];
+
+            for (const file of files) {
+                try {
+                    const buffer = await file.arrayBuffer();
+                    const res = await fetch('/api/upload/image?channel=' + encodeURIComponent('tts-gifs-' + (ttsChannelKey() || 'default')), {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': file.type || 'application/octet-stream',
+                            'X-Filename': encodeURIComponent(file.name),
+                        },
+                        body: buffer,
+                    });
+                    const data = await res.json();
+                    if (!data.ok) throw new Error(data.error);
+                    ttsConfig.gifs[ev].push(data.url);
+                } catch (err) {
+                    alert('GIF upload failed (' + file.name + '): ' + err.message);
+                }
+            }
+            e.target.value = '';
+            ttsRenderGifGalleries();
+            ttsSaveConfig();
+        });
+    });
+}
+
 function ttsWireControls() {
     const ids = [
         'tts-default-voice', 'tts-gap', 'tts-maxchars', 'tts-model', 'tts-language-default', 'tts-language-autodetect',
+        'tts-gifs-enabled',
         'tts-bits-enabled', 'tts-bits-min', 'tts-bits-voice', 'tts-bits-template',
         'tts-resub-enabled', 'tts-resub-mintier', 'tts-resub-voice', 'tts-resub-template',
         'tts-redeem-enabled', 'tts-redeem-title', 'tts-redeem-id', 'tts-redeem-voice', 'tts-redeem-template',
@@ -1139,14 +1261,14 @@ function ttsWireControls() {
 
     const connectBtn = ttsEl('tts-connect-btn');
     if (connectBtn) connectBtn.addEventListener('click', () => {
-        window.open('/api/tts/oauth/start', '_blank', 'width=600,height=800');
+        window.open(ttsApi('/api/tts/oauth/start'), '_blank', 'width=600,height=800');
     });
     const reconnectBtn = ttsEl('tts-reconnect-btn');
     if (reconnectBtn) reconnectBtn.addEventListener('click', async () => {
         reconnectBtn.textContent = '⟳ Connecting…';
         reconnectBtn.disabled = true;
         try {
-            const res = await fetch('/api/tts/eventsub/connect', { method: 'POST' });
+            const res = await fetch(ttsApi('/api/tts/eventsub/connect'), { method: 'POST' });
             const data = await res.json();
             reconnectBtn.textContent = data.ok ? '⟳ Reconnect EventSub' : '✗ ' + data.error;
             if (data.ok) setTimeout(ttsRefreshStatus, 3000);
@@ -1161,6 +1283,8 @@ function ttsWireControls() {
 
     const copyBtn = ttsEl('tts-copy-link');
     if (copyBtn) copyBtn.addEventListener('click', ttsCopyOverlayLink);
+
+    ttsWireGifUploads();
 
     const queueRefresh = ttsEl('tts-queue-refresh');
     if (queueRefresh) queueRefresh.addEventListener('click', ttsLoadQueue);
@@ -1190,7 +1314,7 @@ function ttsWireControls() {
             // First, show how the voice tag resolves so a mismatch is obvious.
             let voiceInfo = '';
             try {
-                const r = await fetch('/api/tts/voices/resolve?text=' + encodeURIComponent(text));
+                const r = await fetch(ttsApi('/api/tts/voices/resolve?text=' + encodeURIComponent(text)));
                 const rd = await r.json();
                 voiceInfo = ` — voice: ${rd.voiceName || '(default)'}`;
             } catch {}
@@ -1237,7 +1361,7 @@ function ttsWireControls() {
         if (!wrap) return;
         wrap.innerHTML = '<div class="hint">Loading rewards...</div>';
         try {
-            const res = await fetch('/api/tts/rewards');
+            const res = await fetch(ttsApi('/api/tts/rewards'));
             const data = await res.json();
             if (!res.ok || !data.ok) {
                 wrap.innerHTML = `<div class="hint">${ttsEscape(data.error || ('Error ' + res.status))}</div>`;
@@ -1277,9 +1401,30 @@ function ttsWireControls() {
     });
 }
 
+// ── TTS access gate: accounts without ttsAccess never see the TTS UI ─────────
+function ttsAccountHasAccess() {
+    try {
+        const stored = sessionStorage.getItem('account');
+        if (!stored) return false;
+        return !!JSON.parse(stored).ttsAccess;
+    } catch { return false; }
+}
+
+function ttsRemoveUiForNoAccess() {
+    const tabBtn = document.querySelector('.panel-tab[data-tab="tts"]');
+    if (tabBtn) tabBtn.remove();
+    const tabContent = ttsEl('tab-tts');
+    if (tabContent) tabContent.remove();
+}
+
 // ── Init the TTS tab once the DOM is ready ───────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
     if (!ttsEl('tab-tts')) return;
+    if (!ttsAccountHasAccess()) {
+        // No TTS access → remove the tab button and its content entirely.
+        ttsRemoveUiForNoAccess();
+        return;
+    }
     await ttsLoadConfig();
     ttsApplyToForm();
     ttsWireControls();

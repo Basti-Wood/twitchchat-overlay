@@ -85,45 +85,101 @@
         ]
     },
     "tts": {
-        "defaultVoice": "Adam - Dominant, Firm",
-        "gapSeconds": 4,
-        "maxChars": 300,
-        "maxClipSeconds": 30,
-        "modelId": "eleven_multilingual_v2",
-        "language": {
-            "default": "de",
-            "autoDetect": false
+        "basti_wood": {
+            "defaultVoice": "Adam - Dominant, Firm",
+            "gapSeconds": 4,
+            "maxChars": 300,
+            "maxClipSeconds": 30,
+            "modelId": "eleven_multilingual_v2",
+            "language": {
+                "default": "de",
+                "autoDetect": true
+            },
+            "stability": 0.5,
+            "similarityBoost": 0.75,
+            "bits": {
+                "enabled": false,
+                "minBits": 100,
+                "voice": "",
+                "template": ""
+            },
+            "resubs": {
+                "enabled": true,
+                "minTier": 1,
+                "voice": "",
+                "template": ""
+            },
+            "gifs": {
+                "enabled": true,
+                "bits": [],
+                "resubs": [],
+                "redeems": []
+            },
+            "redeems": {
+                "enabled": true,
+                "rewardTitle": "TTS",
+                "rewardId": "0f9b4e71-24cf-4dcd-9144-bd891be1f0fa",
+                "voice": "Roger - Laid-Back, Casual, Resonant",
+                "template": ""
+            },
+            "appearance": {
+                "position": "bottom-center",
+                "accent": "#54a2b6",
+                "bg": "rgba(28, 20, 66, 0.85)",
+                "text": "#ffffff",
+                "fontSize": 18,
+                "radius": 16,
+                "duration": 0,
+                "showIcon": true
+            }
         },
-        "stability": 0.5,
-        "similarityBoost": 0.75,
-        "bits": {
-            "enabled": false,
-            "minBits": 100,
-            "voice": "",
-            "template": ""
-        },
-        "resubs": {
-            "enabled": false,
-            "minTier": 1,
-            "voice": "",
-            "template": ""
-        },
-        "redeems": {
-            "enabled": true,
-            "rewardTitle": "TTS",
-            "rewardId": "0f9b4e71-24cf-4dcd-9144-bd891be1f0fa",
-            "voice": "Roger - Laid-Back, Casual, Resonant",
-            "template": ""
-        },
-        "appearance": {
-            "position": "bottom-center",
-            "accent": "#54a2b6",
-            "bg": "rgba(28, 20, 66, 0.85)",
-            "text": "#ffffff",
-            "fontSize": 18,
-            "radius": 16,
-            "duration": 0,
-            "showIcon": true
+        "tuubaa": {
+            "defaultVoice": "Adam - Dominant, Firm",
+            "gapSeconds": 4,
+            "maxChars": 300,
+            "maxClipSeconds": 30,
+            "modelId": "eleven_multilingual_v2",
+            "language": {
+                "default": "de",
+                "autoDetect": true
+            },
+            "stability": 0.5,
+            "similarityBoost": 0.75,
+            "bits": {
+                "enabled": false,
+                "minBits": 100,
+                "voice": "",
+                "template": ""
+            },
+            "resubs": {
+                "enabled": true,
+                "minTier": 1,
+                "voice": "",
+                "template": ""
+            },
+            "gifs": {
+                "enabled": true,
+                "bits": [],
+                "resubs": [],
+                "redeems": []
+            },
+            "redeems": {
+                "enabled": true,
+                "rewardTitle": "TTS",
+                "rewardId": "",
+                "voice": "Roger - Laid-Back, Casual, Resonant",
+                "template": ""
+            },
+            "appearance": {
+                "position": "bottom-center",
+                "accent": "#54a2b6",
+                "bg": "rgba(28, 20, 66, 0.85)",
+                "text": "#ffffff",
+                "fontSize": 18,
+                "radius": 16,
+                "duration": 0,
+                "showIcon": true
+            }
         }
     }
 }

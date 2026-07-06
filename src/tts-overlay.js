@@ -16,6 +16,11 @@
     // so relative URLs work. (If you ever embed the overlay cross-origin, set
     // window.TTS_SERVER before this script runs.)
     const ORIGIN = window.TTS_SERVER || '';
+    // Channel scoping: chat.html already carries ?channel= for the chat itself.
+    const CHANNEL = (new URLSearchParams(window.location.search).get('channel') || '').toLowerCase().trim();
+    const chQuery = (path) => CHANNEL
+        ? path + (path.includes('?') ? '&' : '?') + 'channel=' + encodeURIComponent(CHANNEL)
+        : path;
 
     const localQueue = [];
     let playing = false;
@@ -46,35 +51,49 @@
         if (!item) return;
         playing = true;
 
-        const audio = new Audio(ORIGIN + item.url);
-        audio.volume = 1.0;
+        // A message may consist of several audio segments (one per {Voice}
+        // change) — play them back-to-back.
+        const urls = Array.isArray(item.urls) && item.urls.length
+            ? item.urls
+            : (item.url ? [item.url] : []);
 
         const finish = () => {
             playing = false;
             // Tell the server this clip ended so its inter-clip gap is accurate.
-            fetch(ORIGIN + '/api/tts/done', { method: 'POST' }).catch(() => {});
+            fetch(ORIGIN + chQuery('/api/tts/done'), { method: 'POST' }).catch(() => {});
             // Continue with anything the SSE pushed while we were playing.
             playNext();
         };
 
-        audio.addEventListener('ended', finish, { once: true });
-        audio.addEventListener('error', (e) => {
-            log('audio error', e && e.message);
-            finish();
-        }, { once: true });
+        if (!urls.length) { finish(); return; }
 
-        audio.play().catch(err => {
-            // Autoplay blocked (non-OBS). Re-queue and wait for a user gesture.
-            log('play blocked, will retry after gesture:', err && err.message);
-            playing = false;
-            localQueue.unshift(item);
-            window.addEventListener('click', () => playNext(), { once: true });
-        });
+        let idx = 0;
+        const playSegment = () => {
+            if (idx >= urls.length) { finish(); return; }
+            const audio = new Audio(ORIGIN + urls[idx]);
+            audio.volume = 1.0;
+            const next = () => { idx++; playSegment(); };
+
+            audio.addEventListener('ended', next, { once: true });
+            audio.addEventListener('error', (e) => {
+                log('audio error', e && e.message);
+                next();
+            }, { once: true });
+
+            audio.play().catch(err => {
+                // Autoplay blocked (non-OBS). Re-queue and wait for a user gesture.
+                log('play blocked, will retry after gesture:', err && err.message);
+                playing = false;
+                localQueue.unshift(item);
+                window.addEventListener('click', () => playNext(), { once: true });
+            });
+        };
+        playSegment();
     }
 
     // ── SSE connection ────────────────────────────────────────────────────────
     function connect() {
-        const es = new EventSource(ORIGIN + '/api/tts/stream');
+        const es = new EventSource(ORIGIN + chQuery('/api/tts/stream'));
 
         es.onmessage = (ev) => {
             let msg;

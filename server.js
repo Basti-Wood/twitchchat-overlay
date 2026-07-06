@@ -34,7 +34,7 @@ const path = require('path');
     }
 })();
 
-const { TTSEngine } = require('./src/TTS.js');
+const { TTSManager } = require('./src/TTS.js');
 
 const PORT = Number(process.env.PORT) || 8080;
 const ROOT = __dirname;
@@ -82,19 +82,21 @@ const MIME = {
 };
 
 // ── SSE client registry ──────────────────────────────────────────────────────
-// The overlay (chat.html) opens an EventSource to /api/tts/stream. We keep the
-// response objects here and write events to all of them when audio is ready.
+// Overlays open an EventSource to /api/tts/stream?channel=<name>. Each client
+// is tagged with its channel; events are only pushed to that channel's clients.
+// Clients that connected WITHOUT a channel receive everything (legacy URLs).
 const sseClients = new Set();
 
-function broadcast(payload) {
-    const data = `data: ${JSON.stringify(payload)}\n\n`;
+function broadcast(channel, payload) {
+    const data = `data: ${JSON.stringify({ ...payload, channel })}\n\n`;
     for (const res of sseClients) {
+        if (res._ttsChannel && channel && res._ttsChannel !== channel) continue;
         try { res.write(data); } catch { /* dropped on next cleanup */ }
     }
 }
 
-// ── TTS engine ───────────────────────────────────────────────────────────────
-const tts = new TTSEngine({ root: ROOT, broadcast });
+// ── TTS manager: one engine (OAuth + EventSub + queue + settings) per user ──
+const tts = new TTSManager({ root: ROOT, broadcast });
 tts.boot().catch(e => console.error('[tts] boot error:', e.message));
 
 const server = http.createServer(async (req, res) => {
@@ -115,6 +117,9 @@ const server = http.createServer(async (req, res) => {
     //  TTS API
     // ═══════════════════════════════════════════════════════════════════════
 
+    // Resolve the engine for channel-scoped routes (?channel=<name>).
+    const ttsEngine = () => tts.resolveEngine(urlObj.searchParams.get('channel'));
+
     // ── SSE stream the overlay subscribes to ────────────────────────────────
     if (req.method === 'GET' && pathname === '/api/tts/stream') {
         res.writeHead(200, {
@@ -122,8 +127,10 @@ const server = http.createServer(async (req, res) => {
             'Cache-Control': 'no-cache, no-transform',
             'Connection':    'keep-alive',
         });
+        const ch = (urlObj.searchParams.get('channel') || '').toLowerCase().trim();
+        res._ttsChannel = ch || null; // null = legacy client, receives everything
         res.write('retry: 3000\n\n');
-        res.write(`data: ${JSON.stringify({ type: 'hello' })}\n\n`);
+        res.write(`data: ${JSON.stringify({ type: 'hello', channel: ch || null })}\n\n`);
         sseClients.add(res);
         const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch {} }, 25000);
         req.on('close', () => { clearInterval(ping); sseClients.delete(res); });
@@ -132,11 +139,13 @@ const server = http.createServer(async (req, res) => {
 
     // ── Status (config page polls this) ──────────────────────────────────────
     if (req.method === 'GET' && pathname === '/api/tts/status') {
-        sendJSON(res, 200, tts.status());
+        const eng = ttsEngine();
+        if (!eng) return sendJSON(res, 400, { error: 'channel required (?channel=<name>)' });
+        sendJSON(res, 200, eng.status());
         return;
     }
 
-    // ── Voice list for the dropdowns ─────────────────────────────────────────
+    // ── Voice list for the dropdowns (shared across all channels) ────────────
     if (req.method === 'GET' && pathname === '/api/tts/voices') {
         if (tts.voices.length === 0) await tts.loadVoices();
         sendJSON(res, 200, { voices: tts.voices });
@@ -147,8 +156,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && pathname === '/api/tts/voices/resolve') {
         const text = urlObj.searchParams.get('text') || '';
         if (tts.voices.length === 0) await tts.loadVoices();
-        const { voiceId, cleanText } = tts.resolveVoiceFromText(text, tts.defaultVoiceId());
-        const voiceName = tts.voiceNameFromId(voiceId);
+        const eng = ttsEngine();
+        if (!eng) return sendJSON(res, 400, { error: 'channel required (?channel=<name>)' });
+        const { voiceId, cleanText } = eng.resolveVoiceFromText(text, eng.defaultVoiceId());
+        const voiceName = eng.voiceNameFromId(voiceId);
         sendJSON(res, 200, {
             input: text,
             voiceId,
@@ -161,26 +172,31 @@ const server = http.createServer(async (req, res) => {
 
     // Appearance for the visual overlay (tts.html reads this)
     if (req.method === 'GET' && pathname === '/api/tts/appearance') {
-        sendJSON(res, 200, tts.appearance);
+        const eng = ttsEngine();
+        sendJSON(res, 200, eng ? eng.appearance : {});
         return;
     }
 
     // Recent requests for the config "Queue" view
     if (req.method === 'GET' && pathname === '/api/tts/queue') {
-        sendJSON(res, 200, { requests: tts.recentRequests() });
+        const eng = ttsEngine();
+        sendJSON(res, 200, { requests: eng ? eng.recentRequests() : [] });
         return;
     }
 
     // Config page tells overlays the appearance changed (live refresh)
     if (req.method === 'POST' && pathname === '/api/tts/appearance/notify') {
-        broadcast({ type: 'appearance' });
+        const ch = (urlObj.searchParams.get('channel') || '').toLowerCase().trim();
+        broadcast(ch || null, { type: 'appearance' });
         sendJSON(res, 200, { ok: true });
         return;
     }
 
     // ── Begin Twitch OAuth (redirect the browser to Twitch) ──────────────────
     if (req.method === 'GET' && pathname === '/api/tts/oauth/start') {
-        const url = tts.buildAuthUrl();
+        const eng = ttsEngine();
+        if (!eng) { res.writeHead(400); res.end('channel required (?channel=<name>)'); return; }
+        const url = eng.buildAuthUrl();
         if (!url) { res.writeHead(500); res.end('TWITCH_CLIENT_ID not configured in .env'); return; }
         res.writeHead(302, { Location: url });
         res.end();
@@ -189,19 +205,23 @@ const server = http.createServer(async (req, res) => {
 
     // ── Force EventSub reconnect (no OAuth needed if already authorized) ───────
     if (req.method === 'POST' && pathname === '/api/tts/eventsub/connect') {
-        if (!tts.tokens || !tts.tokens.user_id) {
+        const eng = ttsEngine();
+        if (!eng) return sendJSON(res, 400, { ok: false, error: 'channel required (?channel=<name>)' });
+        if (!eng.tokens || !eng.tokens.user_id) {
             sendJSON(res, 400, { ok: false, error: 'Not authorized — use the Connect Twitch button first.' });
             return;
         }
-        tts.forceReconnect().catch(e => console.error('[eventsub reconnect]', e.message));
+        eng.forceReconnect().catch(e => console.error('[eventsub reconnect]', e.message));
         sendJSON(res, 200, { ok: true, message: 'Reconnecting EventSub…' });
         return;
     }
 
     // ── List channel point rewards (for picking redeem IDs in the UI) ────────
     if (req.method === 'GET' && pathname === '/api/tts/rewards') {
+        const eng = ttsEngine();
+        if (!eng) return sendJSON(res, 400, { ok: false, error: 'channel required (?channel=<name>)' });
         try {
-            const rewards = await tts.listCustomRewards();
+            const rewards = await eng.listCustomRewards();
             sendJSON(res, 200, { ok: true, rewards });
         } catch (e) {
             sendJSON(res, 400, { ok: false, error: e.message });
@@ -239,14 +259,17 @@ const server = http.createServer(async (req, res) => {
         const acc = tts.accounts.find(a => a.username === data.username && a.password === data.password);
         if (!acc)              return sendJSON(res, 401, { ok: false, error: 'Invalid account' });
         if (!acc.ttsAccess)    return sendJSON(res, 403, { ok: false, error: 'This account does not have TTS access' });
+        if (!acc.channel)      return sendJSON(res, 400, { ok: false, error: 'Account has no channel set' });
         if (!data.text)        return sendJSON(res, 400, { ok: false, error: 'No text' });
 
+        // The test always goes to the ACCOUNT's own channel engine.
+        const eng = tts.engineFor(acc.channel);
         const kind = String(data.kind || 'manual').toLowerCase() === 'redeem' ? 'redeem' : 'manual';
         const meta = kind === 'redeem'
             ? { kind: 'redeem', user: acc.username, reward: data.reward || 'Test Redeem', rewardId: 'test-redeem-single' }
             : { kind: 'manual', user: acc.username };
-        tts.enqueue(data.text, data.voice, meta);
-        sendJSON(res, 200, { ok: true, queueLength: tts.queue.length });
+        eng.enqueue(data.text, data.voice, meta);
+        sendJSON(res, 200, { ok: true, queueLength: eng.queue.length });
         return;
     }
 
@@ -260,8 +283,10 @@ const server = http.createServer(async (req, res) => {
         const acc = tts.accounts.find(a => a.username === data.username && a.password === data.password);
         if (!acc)           return sendJSON(res, 401, { ok: false, error: 'Invalid account' });
         if (!acc.ttsAccess) return sendJSON(res, 403, { ok: false, error: 'This account does not have TTS access' });
+        if (!acc.channel)   return sendJSON(res, 400, { ok: false, error: 'Account has no channel set' });
 
-        const redeemVoice = (tts.config && tts.config.redeems && tts.config.redeems.voice) || '';
+        const eng = tts.engineFor(acc.channel);
+        const redeemVoice = (eng.config && eng.config.redeems && eng.config.redeems.voice) || '';
         const samples = [
             { user: 'Basti',  reward: 'TTS', message: '{Roger - Laid-Back, Casual, Resonant} Das ist ein Parser-Test mit strict braces.' },
             { user: 'Tuubaa', reward: 'TTS', message: '{Roger - Laid-Back, Casual, Resonant} Hallo zusammen, Redeem Nummer zwei.' },
@@ -269,7 +294,7 @@ const server = http.createServer(async (req, res) => {
         ];
 
         samples.forEach(s => {
-            tts.enqueue(s.message, redeemVoice, {
+            eng.enqueue(s.message, redeemVoice, {
                 kind: 'redeem',
                 user: s.user,
                 reward: s.reward,
@@ -277,13 +302,15 @@ const server = http.createServer(async (req, res) => {
             });
         });
 
-        sendJSON(res, 200, { ok: true, added: samples.length, queueLength: tts.queue.length });
+        sendJSON(res, 200, { ok: true, added: samples.length, queueLength: eng.queue.length });
         return;
     }
 
     // ── Overlay reports a clip finished playing (releases the queue) ─────────
     if (req.method === 'POST' && pathname === '/api/tts/done') {
-        tts.notifyPlaybackDone();
+        const eng = ttsEngine();
+        if (eng) eng.notifyPlaybackDone();
+        else tts.engines.forEach(e => e.notifyPlaybackDone()); // legacy overlay without ?channel
         sendJSON(res, 200, { ok: true });
         return;
     }

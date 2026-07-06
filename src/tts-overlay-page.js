@@ -18,6 +18,13 @@
     const stage  = document.getElementById('tts-stage');
     const params = new URLSearchParams(window.location.search);
     const DEBUG  = params.get('debug') === '1';
+    // Which streamer this overlay belongs to (?channel=<name>). Each channel
+    // has its own TTS engine on the server; without it (single-user setups
+    // with one TTS account) the server falls back to that account.
+    const CHANNEL = (params.get('channel') || '').toLowerCase().trim();
+    const chQuery = (path) => CHANNEL
+        ? path + (path.includes('?') ? '&' : '?') + 'channel=' + encodeURIComponent(CHANNEL)
+        : path;
 
     const localQueue = [];
     let playing = false;
@@ -48,7 +55,7 @@
     async function loadAppearance() {
         let cfg = {};
         try {
-            const res = await fetch(ORIGIN + '/api/tts/appearance');
+            const res = await fetch(ORIGIN + chQuery('/api/tts/appearance'));
             if (res.ok) cfg = await res.json();
         } catch (e) { setStatus('appearance fetch failed: ' + e.message); }
         appearance = {
@@ -118,7 +125,10 @@
 
         const iconHtml = appearance.showIcon
             ? `<div class="tts-alert-icon">${ICONS[meta.kind] || ICONS.manual}</div>` : '';
+        const gifHtml = item.gif
+            ? `<div class="tts-alert-gif"><img src="${escapeHtml(ORIGIN + item.gif)}" alt=""></div>` : '';
         el.innerHTML = `
+            ${gifHtml}
             <div class="tts-alert-head">
                 ${iconHtml}
                 <div>
@@ -163,47 +173,56 @@
             setTimeout(() => {
                 hideAlert(alertEl);
                 playing = false;
-                fetch(ORIGIN + '/api/tts/done', { method: 'POST' }).catch(() => {});
+                fetch(ORIGIN + chQuery('/api/tts/done'), { method: 'POST' }).catch(() => {});
                 playNext();
             }, wait);
             if (why) setStatus(why);
         };
 
-        if (!item.url) { release('no audio url — card only'); return; }
-
-        const audio = new Audio(ORIGIN + item.url);
-        audio.volume = 1.0;
+        // A message may consist of several audio segments (one per {Voice}
+        // change) — play them back-to-back under the same card.
+        const urls = Array.isArray(item.urls) && item.urls.length
+            ? item.urls
+            : (item.url ? [item.url] : []);
+        if (!urls.length) { release('no audio url — card only'); return; }
 
         // Hard safety timeout: if 'ended' never fires (codec stall etc.), release
-        // anyway after the clip's expected max so the queue can't wedge.
-        const safety = setTimeout(() => release('audio safety timeout'), 30000);
+        // anyway after the expected max so the queue can't wedge.
+        const safety = setTimeout(() => release('audio safety timeout'), 30000 * urls.length);
+        let idx = 0;
 
-        audio.addEventListener('ended', () => { clearTimeout(safety); release('audio ended'); }, { once: true });
-        audio.addEventListener('error', () => { clearTimeout(safety); release('audio error — card kept'); }, { once: true });
+        const playSegment = () => {
+            if (idx >= urls.length) { clearTimeout(safety); release('audio ended'); return; }
+            const audio = new Audio(ORIGIN + urls[idx]);
+            audio.volume = 1.0;
+            const next = () => { idx++; playSegment(); };
+            audio.addEventListener('ended', next, { once: true });
+            audio.addEventListener('error', () => { setStatus('segment audio error — skipping'); next(); }, { once: true });
 
-        const tryPlay = () => audio.play();
-        tryPlay().then(() => setStatus('audio playing')).catch(err => {
-            // Autoplay blocked (typically only in a normal browser tab, not OBS).
-            setStatus('autoplay blocked — retrying; click overlay if silent');
-            // Retry a few times automatically; also retry on any user gesture.
-            let tries = 0;
-            const retry = () => {
-                tries++;
-                audio.play().then(() => setStatus('audio playing (retry)')).catch(() => {
-                    if (tries < 20) setTimeout(retry, 500);
-                });
-            };
-            window.addEventListener('click', retry, { once: true });
-            window.addEventListener('pointerdown', retry, { once: true });
-            setTimeout(retry, 500);
-        });
+            audio.play().then(() => setStatus(`audio playing (${idx + 1}/${urls.length})`)).catch(() => {
+                // Autoplay blocked (typically only in a normal browser tab, not OBS).
+                setStatus('autoplay blocked — retrying; click overlay if silent');
+                let tries = 0;
+                const retry = () => {
+                    tries++;
+                    audio.play().then(() => setStatus('audio playing (retry)')).catch(() => {
+                        if (tries < 20) setTimeout(retry, 500);
+                        else next(); // give up on this segment, keep the queue moving
+                    });
+                };
+                window.addEventListener('click', retry, { once: true });
+                window.addEventListener('pointerdown', retry, { once: true });
+                setTimeout(retry, 500);
+            });
+        };
+        playSegment();
     }
 
     // ── SSE connection ────────────────────────────────────────────────────────
     let es = null;
     function connect() {
         try {
-            es = new EventSource(ORIGIN + '/api/tts/stream');
+            es = new EventSource(ORIGIN + chQuery('/api/tts/stream'));
         } catch (e) {
             setStatus('SSE create failed: ' + e.message);
             setTimeout(connect, 3000);

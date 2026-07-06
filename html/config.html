@@ -307,6 +307,32 @@
                     </div>
 
                     <div class="config-section">
+                        <div class="config-section-title">Alert GIFs</div>
+                        <div class="config-field">
+                            <label><input type="checkbox" id="tts-gifs-enabled" checked> Show GIFs on alerts</label>
+                            <span class="hint">One GIF is picked at random from the matching event's list for every alert.</span>
+                        </div>
+                        <div class="config-field">
+                            <label>Bits GIFs</label>
+                            <label class="file-label" for="tts-gif-bits-upload">+ Add GIF(s)</label>
+                            <input type="file" id="tts-gif-bits-upload" accept="image/gif,image/webp,image/apng,image/png,image/jpeg" multiple>
+                            <div class="img-gallery" id="tts-gif-bits-gallery"></div>
+                        </div>
+                        <div class="config-field">
+                            <label>Resub GIFs</label>
+                            <label class="file-label" for="tts-gif-resubs-upload">+ Add GIF(s)</label>
+                            <input type="file" id="tts-gif-resubs-upload" accept="image/gif,image/webp,image/apng,image/png,image/jpeg" multiple>
+                            <div class="img-gallery" id="tts-gif-resubs-gallery"></div>
+                        </div>
+                        <div class="config-field">
+                            <label>Redeem GIFs</label>
+                            <label class="file-label" for="tts-gif-redeems-upload">+ Add GIF(s)</label>
+                            <input type="file" id="tts-gif-redeems-upload" accept="image/gif,image/webp,image/apng,image/png,image/jpeg" multiple>
+                            <div class="img-gallery" id="tts-gif-redeems-gallery"></div>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
                         <div class="config-section-title">Status</div>
                         <div id="tts-status" class="hint">Checking…</div>
                         <button class="btn-small" id="tts-connect-btn" style="margin-top:8px">Connect Twitch (EventSub)</button>
@@ -350,7 +376,7 @@
                                 <option value="de">German (de)</option>
                                 <option value="en">English (en)</option>
                             </select>
-                            <span class="hint">Default is German. Keep auto-detect off if you want German consistently.</span>
+                            <span class="hint">Used when auto-detect is off or the language is unclear. Note: ElevenLabs only enforces the language on Turbo/Flash v2.5 models.</span>
                         </div>
 
                         <div class="config-field">

@@ -55,17 +55,26 @@ function writeJSON(file, data) {
 
 class TTSEngine {
     /**
+     * One engine per streamer/channel. Each engine has its OWN Twitch OAuth
+     * tokens, EventSub connection, queue, and settings (config.tts[channel]).
+     *
      * @param {object} opts
      * @param {string} opts.root        project root dir
-     * @param {function} opts.broadcast (payload) => void  — push to SSE clients
+     * @param {string} opts.channel     channel key (lowercase) this engine belongs to
+     * @param {object} opts.manager     TTSManager (shared ElevenLabs voice cache)
+     * @param {function} opts.broadcast (payload) => void  — push to this channel's SSE clients
      */
-    constructor({ root, broadcast }) {
+    constructor({ root, broadcast, channel, manager }) {
         this.root      = root;
+        this.channel   = String(channel || '').toLowerCase();
+        this.manager   = manager || null;
         this.broadcast = broadcast || (() => {});
 
         this.confDir   = path.join(root, 'conf');
         this.audioDir  = path.join(root, 'uploads', 'tts');
-        this.tokenFile = path.join(this.confDir, 'tokens.json');
+        const suffix   = this.channel ? '.' + this.channel.replace(/[^a-z0-9_-]/g, '_') : '';
+        this.tokenFile = path.join(this.confDir, `tokens${suffix}.json`);
+        this.queueFile = path.join(this.confDir, `tts-queue${suffix}.json`);
 
         if (!fs.existsSync(this.audioDir)) fs.mkdirSync(this.audioDir, { recursive: true });
 
@@ -88,11 +97,11 @@ class TTSEngine {
         this.keepaliveSecs = 30;
         this.reconnecting  = false;
 
-        // ── Voice cache (id <-> name), refreshed from ElevenLabs ──
-        this.voices = []; // [{ id, name }]
+        // ── Voice cache — shared across all engines via the manager ──
+        this._voices = []; // only used when running without a manager
 
         // ── Queue ──
-        this.queue      = [];     // [{ id, text, voiceId, meta }]
+        this.queue      = [];     // [{ id, text, segments: [{voiceId, text}], meta, ts }]
         this.playing    = false;
         this.lastFinish = 0;
         this._seq       = 0;      // monotonically increasing request id
@@ -107,10 +116,29 @@ class TTSEngine {
         this._oauthRedirectUri = null;
     }
 
-    // ── Config access — always read fresh so the config page edits take effect ──
+    // ── Config access — always read fresh so the config page edits take effect.
+    //    TTS settings are PER CHANNEL: config.tts[<channel>] = { ... }. A legacy
+    //    flat config.tts (pre per-user) is still readable as a fallback. ──
     get config() {
         const all = readJSON(path.join(this.confDir, 'config.json'), {});
-        return (all && all.tts) || {};
+        const tts = (all && all.tts) || {};
+        if (this.channel && tts[this.channel] && typeof tts[this.channel] === 'object'
+            && !Array.isArray(tts[this.channel])) {
+            return tts[this.channel];
+        }
+        // Legacy flat shape (has setting keys directly on tts)
+        if (tts.bits || tts.appearance || tts.defaultVoice !== undefined) return tts;
+        return {};
+    }
+
+    // Shared ElevenLabs voice cache (loaded once by the manager).
+    get voices() {
+        return this.manager ? this.manager.voices : this._voices;
+    }
+
+    async loadVoices() {
+        if (this.manager) return this.manager.loadVoices();
+        return this._voices;
     }
 
     // Appearance sub-block for the visual alert overlay.
@@ -475,22 +503,8 @@ class TTSEngine {
     }
 
     // ───────────────────────────────────────────────────────────────────────
-    //  ElevenLabs voices
+    //  ElevenLabs voices (cache itself lives on the TTSManager)
     // ───────────────────────────────────────────────────────────────────────
-
-    async loadVoices() {
-        if (!this.elevenKey) { warn('No ELEVENLABS_API_KEY — voices unavailable.'); return []; }
-        try {
-            const res = await fetch(`${ELEVEN_API}/voices`, {
-                headers: { 'xi-api-key': this.elevenKey },
-            });
-            if (!res.ok) { warn('voices fetch failed', res.status); return this.voices; }
-            const data = await res.json();
-            this.voices = (data.voices || []).map(v => ({ id: v.voice_id, name: v.name }));
-            log('loaded', this.voices.length, 'ElevenLabs voices');
-            return this.voices;
-        } catch (e) { warn('voices error:', e.message); return this.voices; }
-    }
 
     _findVoiceByTag(rawTag) {
         const tag = String(rawTag || '').trim().replace(/^voice\s*[:=]\s*/i, '').trim();
@@ -536,22 +550,74 @@ class TTSEngine {
         return { voiceId: selected, cleanText: messageOnly };
     }
 
+    /**
+     * Split a message into voice segments so the voice can change MID-message.
+     * "{Rachel} hello {Adam} goodbye" → [{voiceId: rachel, text: "hello"},
+     * {voiceId: adam, text: "goodbye"}]. Each segment becomes its own
+     * ElevenLabs request. Text before the first tag uses the default voice.
+     * Unknown tags are stripped (never spoken) and the voice stays unchanged.
+     * Consecutive segments with the same voice are merged into one request.
+     */
+    splitVoiceSegments(rawText, defaultVoiceId) {
+        const raw = String(rawText || '');
+        const re = /\{\s*([^{}]*?)\s*\}/g;
+        const segments = [];
+        let voice = defaultVoiceId;
+        let last = 0;
+        let m;
+
+        const push = (chunk) => {
+            const clean = String(chunk || '').replace(/\s+/g, ' ').trim();
+            if (!clean) return;
+            const prev = segments[segments.length - 1];
+            if (prev && prev.voiceId === voice) prev.text += ' ' + clean;
+            else segments.push({ voiceId: voice, text: clean });
+        };
+
+        while ((m = re.exec(raw)) !== null) {
+            push(raw.slice(last, m.index));   // text before this tag → current voice
+            const hit = this._findVoiceByTag(m[1]);
+            if (hit) voice = hit.id;          // unknown tag: stripped, voice unchanged
+            last = re.lastIndex;
+        }
+        push(raw.slice(last));
+        return segments;
+    }
+
     _detectLanguageCode(text) {
-        const s = String(text || '').toLowerCase();
-        if (!s) return 'de';
+        const defaultLang = String((this.config.language || {}).default || 'de').toLowerCase();
+        const s = ' ' + String(text || '').toLowerCase() + ' ';
+        if (!s.trim()) return defaultLang;
+
+        // Umlauts / ß are a near-certain German signal.
         if (/[äöüß]/.test(s)) return 'de';
-        if (/\b(ich|du|und|nicht|danke|bitte|hallo|tsch[üu]ss|schon|heute|morgen|ja|nein|der|die|das|ein|eine|mit|f[uü]r)\b/.test(s)) return 'de';
-        if (/\b(the|and|you|hello|thanks|please|this|that|with|for|is|are)\b/.test(s)) return 'en';
-        return 'de';
+
+        // Score both languages by counting distinctive stopwords — a single
+        // shared word ("in", "was", "die") can no longer flip the language.
+        const DE = /\b(ich|du|er|sie|wir|ihr|und|nicht|kein|keine|danke|bitte|hallo|tschuess|servus|moin|heute|morgen|gestern|ja|nein|der|das|ein|eine|einen|mit|fuer|auf|aus|bei|von|zu|zum|zur|ist|sind|war|waren|habe|hast|hat|haben|mal|schon|noch|sehr|auch|aber|oder|wenn|dann|doch|geil|krass|dich|mich|dir|mir|uns|euch|wie|geht|gut|super|toll|viel|vielen|dank|gruesse|liebe|lieber|streamer|kanal)\b/g;
+        const EN = /\b(i|you|he|she|we|they|the|and|not|no|thanks|thank|please|hello|hi|hey|today|tomorrow|yesterday|yes|a|an|with|for|on|from|at|of|to|is|are|was|were|have|has|had|very|also|but|or|if|then|great|awesome|nice|love|stream|chat|how|what|good|much|many|greetings|dear|your|my|this|that|it|its)\b/g;
+
+        const deHits = (s.match(DE) || []).length;
+        const enHits = (s.match(EN) || []).length;
+
+        if (deHits > enHits) return 'de';
+        if (enHits > deHits) return 'en';
+        return defaultLang;
     }
 
     _resolveLanguageCode(text) {
         const cfg = this.config;
         const language = cfg.language || {};
         const defaultLanguage = String(language.default || 'de').toLowerCase();
-        const autoDetect = language.autoDetect === true;
+        // Auto-detect is ON unless explicitly disabled.
+        const autoDetect = language.autoDetect !== false;
         if (autoDetect) return this._detectLanguageCode(text);
         return defaultLanguage || 'de';
+    }
+
+    /** Only some ElevenLabs models accept language_code enforcement. */
+    _modelSupportsLanguageCode(modelId) {
+        return /turbo_v2_5|flash_v2_5/i.test(String(modelId || ''));
     }
 
     /** Convert a stored voice reference (name OR id) to an ElevenLabs voice id. */
@@ -592,35 +658,33 @@ class TTSEngine {
 
         // Length cap so one troll can't queue a 5-minute monologue.
         const maxChars = cfg.maxChars || 300;
-        let text = rawText.trim().slice(0, maxChars);
+        const text = rawText.trim().slice(0, maxChars);
 
-        // {Voice} in the text wins; else the per-trigger preset voice; else default.
-        // Preset voices are stored by NAME (from the config UI), so convert to id.
+        // {Voice} tags in the text win; else the per-trigger preset voice; else
+        // default. Preset voices are stored by NAME (config UI) → convert to id.
         const presetId = this.voiceRefToId(presetVoice);
         const fallbackVoice = presetId || this.defaultVoiceId();
-        const { voiceId, cleanText } = this.resolveVoiceFromText(text, fallbackVoice);
-        if (!voiceId) { warn('No voice available — dropping TTS.'); return; }
-        if (!cleanText) return;
+        if (!fallbackVoice) { warn('No voice available — dropping TTS.'); return; }
 
-        // Diagnostic: show how the voice was chosen so a mismatched {tag} is obvious.
-        {
-            const tagMatch = String(text).match(/^\s*\{\s*([^}]*?)\s*\}/);
-            const tag = tagMatch ? tagMatch[1].trim() : '(none)';
-            const usedDefault = voiceId === fallbackVoice;
-            log(`voice pick: tag="${tag}" → ${this.voiceNameFromId(voiceId)} (${voiceId})${usedDefault ? ' [default/fallback — tag not matched]' : ' [matched tag]'}`);
-        }
+        // Split into per-voice segments (voice can change mid-message).
+        const segments = this.splitVoiceSegments(text, fallbackVoice);
+        if (!segments.length) return;
+
+        const spoken = segments.map(s => s.text).join(' ');
+        const voiceNames = [...new Set(segments.map(s => this.voiceNameFromId(s.voiceId)))];
+        log(`voice pick: ${segments.length} segment(s) → ${voiceNames.join(', ')}`);
 
         const id = ++this._seq;
-        const voiceName = this.voiceNameFromId(voiceId);
-        this.queue.push({ id, text: cleanText, voiceId, meta });
+        this.queue.push({ id, text: spoken, segments, meta, ts: Date.now() });
+        this._persistQueue();
 
         // Record a history entry for the Queue view (status: queued).
         const histEntry = {
             id,
             kind:      meta.kind || 'manual',
-            user:      meta.user || (meta.kind === 'bits' && meta.user) || 'Someone',
-            spoken:    cleanText,
-            voiceName,
+            user:      meta.user || 'Someone',
+            spoken,
+            voiceName: voiceNames.join(', '),
             status:    'queued',
             ts:        Date.now(),
         };
@@ -628,8 +692,52 @@ class TTSEngine {
         // Notify any listeners (config Queue view) that the queue changed.
         this.broadcast({ type: 'queue', action: 'add', item: this._publicHistEntry(histEntry) });
 
-        log(`queued (${histEntry.kind}): "${cleanText.slice(0, 60)}" → ${voiceName} [len ${this.queue.length}]`);
+        log(`queued (${histEntry.kind}): "${spoken.slice(0, 60)}" → ${voiceNames.join(', ')} [len ${this.queue.length}]`);
         this._drain();
+    }
+
+    // ── Queue persistence: the pending queue survives a server restart. An
+    //    item is deleted from disk once its audio was sent to the overlay
+    //    (or it failed permanently). ──────────────────────────────────────────
+    _persistQueue() {
+        writeJSON(this.queueFile, {
+            items: this.queue.map(q => ({
+                id: q.id, text: q.text, segments: q.segments, meta: q.meta, ts: q.ts,
+            })),
+        });
+    }
+
+    _restoreQueue() {
+        const data = readJSON(this.queueFile, null);
+        if (!data || !Array.isArray(data.items) || !data.items.length) return;
+        for (const it of data.items) {
+            if (!it || !Array.isArray(it.segments) || !it.segments.length) continue;
+            this._seq = Math.max(this._seq, Number(it.id) || 0);
+            this.queue.push(it);
+            this._pushHistory({
+                id:        it.id,
+                kind:      (it.meta && it.meta.kind) || 'manual',
+                user:      (it.meta && it.meta.user) || 'Someone',
+                spoken:    it.text,
+                voiceName: [...new Set(it.segments.map(s => this.voiceNameFromId(s.voiceId)))].join(', '),
+                status:    'queued',
+                ts:        it.ts || Date.now(),
+            });
+        }
+        if (this.queue.length) {
+            log(`restored ${this.queue.length} queued message(s) from disk`);
+            this._drain();
+        }
+    }
+
+    /** Pick a random GIF for this event kind (config.tts.gifs). */
+    _pickGif(kind) {
+        const g = this.config.gifs;
+        if (!g || g.enabled === false) return null;
+        const key = ({ bits: 'bits', resub: 'resubs', redeem: 'redeems' })[kind];
+        const list = key && Array.isArray(g[key]) ? g[key].filter(Boolean) : [];
+        if (!list.length) return null;
+        return list[Math.floor(Math.random() * list.length)];
     }
 
     async _drain() {
@@ -645,25 +753,42 @@ class TTSEngine {
         }
 
         this.playing = true;
-        const item = this.queue.shift();
+        // Peek (don't shift) — the item stays in the persisted queue file until
+        // it was actually sent, so a crash mid-synthesis never loses it.
+        const item = this.queue[0];
         const hist = this._histById(item.id);
         if (hist) { hist.status = 'playing'; this._current = hist; }
         if (hist) this.broadcast({ type: 'queue', action: 'update', item: this._publicHistEntry(hist) });
+
+        let sent = false;
         try {
-            const audio = await this._synthesize(item.text, item.voiceId);
-            if (audio) {
-                // Persist to a file the overlay can fetch, then push the URL.
-                const fname = `tts_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.mp3`;
-                fs.writeFileSync(path.join(this.audioDir, fname), audio);
+            // Synthesize each voice segment as its OWN ElevenLabs request.
+            const urls = [];
+            for (const seg of item.segments) {
+                try {
+                    const audio = await this._synthesize(seg.text, seg.voiceId);
+                    if (!audio) continue;
+                    const fname = `tts_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.mp3`;
+                    fs.writeFileSync(path.join(this.audioDir, fname), audio);
+                    urls.push(`/uploads/tts/${fname}`);
+                } catch (e) {
+                    warn(`segment synth failed ("${seg.text.slice(0, 40)}"):`, e.message);
+                }
+            }
+
+            if (urls.length) {
                 this.broadcast({
                     type:   'tts',
-                    url:    `/uploads/tts/${fname}`,
+                    url:    urls[0],   // backward compat for old overlay pages
+                    urls,              // all segments, played back-to-back
                     spoken: item.text,
+                    gif:    this._pickGif(item.meta && item.meta.kind),
                     meta:   item.meta,
                 });
+                sent = true;
                 this._cleanupOldAudio();
             } else if (hist) {
-                // synthesis returned nothing — mark error and release
+                // every segment failed — mark error and release
                 hist.status = 'error';
                 this.broadcast({ type: 'queue', action: 'update', item: this._publicHistEntry(hist) });
             }
@@ -674,10 +799,24 @@ class TTSEngine {
                 this.broadcast({ type: 'queue', action: 'update', item: this._publicHistEntry(hist) });
             }
         } finally {
-            // We don't know the exact clip length server-side; the overlay reports
-            // back when playback ends (see /api/tts/done). As a safety net we also
-            // release after a max timeout so the queue can't wedge forever.
-            this._releaseTimer = setTimeout(() => this._release(), (cfg.maxClipSeconds || 30) * 1000);
+            // Message was sent (or failed permanently) → delete it from the queue
+            // and from the queue file on disk.
+            const idx = this.queue.indexOf(item);
+            if (idx !== -1) this.queue.splice(idx, 1);
+            this._persistQueue();
+
+            if (!sent) {
+                // Nothing will play, so nothing will call /api/tts/done — release
+                // quickly to keep the queue moving.
+                this._releaseTimer = setTimeout(() => this._release(), 500);
+            } else {
+                // We don't know the exact clip length server-side; the overlay
+                // reports back when playback ends (see /api/tts/done). As a safety
+                // net we also release after a max timeout so the queue can't wedge.
+                const perClip = (cfg.maxClipSeconds || 30) * 1000;
+                this._releaseTimer = setTimeout(() => this._release(),
+                    perClip * Math.max(1, item.segments.length));
+            }
         }
     }
 
@@ -697,6 +836,14 @@ class TTSEngine {
 
     notifyPlaybackDone() { this._release(); }
 
+    /** fetch with a hard timeout so a hung request can never block the queue. */
+    async _fetchWithTimeout(url, opts = {}, timeoutMs = 30000) {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), timeoutMs);
+        try { return await fetch(url, { ...opts, signal: ctrl.signal }); }
+        finally { clearTimeout(t); }
+    }
+
     async _synthesize(text, voiceId) {
         if (!this.elevenKey) throw new Error('ELEVENLABS_API_KEY not set');
         const cfg = this.config;
@@ -709,25 +856,54 @@ class TTSEngine {
                 similarity_boost: cfg.similarityBoost  != null ? cfg.similarityBoost  : 0.75,
             },
         };
-        if (!/monolingual/i.test(modelId)) {
+        // language_code is only accepted by Turbo/Flash v2.5 — sending it to
+        // e.g. multilingual_v2 makes the whole request fail with a 400.
+        if (this._modelSupportsLanguageCode(modelId)) {
             payload.language_code = this._resolveLanguageCode(text);
         }
 
-        const res = await fetch(`${ELEVEN_API}/text-to-speech/${voiceId}`, {
-            method: 'POST',
-            headers: {
-                'xi-api-key':   this.elevenKey,
-                'Content-Type': 'application/json',
-                'Accept':       'audio/mpeg',
-            },
-            body: JSON.stringify(payload),
-        });
-        if (!res.ok) {
+        const MAX_ATTEMPTS = 3;
+        let lastErr = null;
+
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            let res;
+            try {
+                res = await this._fetchWithTimeout(`${ELEVEN_API}/text-to-speech/${voiceId}`, {
+                    method: 'POST',
+                    headers: {
+                        'xi-api-key':   this.elevenKey,
+                        'Content-Type': 'application/json',
+                        'Accept':       'audio/mpeg',
+                    },
+                    body: JSON.stringify(payload),
+                }, 30000);
+            } catch (e) {
+                lastErr = (e && e.name === 'AbortError')
+                    ? new Error('ElevenLabs request timed out (30s)')
+                    : e;
+                warn(`synth attempt ${attempt}/${MAX_ATTEMPTS} failed:`, lastErr.message);
+                if (attempt < MAX_ATTEMPTS) await new Promise(r => setTimeout(r, attempt * 1500));
+                continue;
+            }
+
+            if (res.ok) return Buffer.from(await res.arrayBuffer());
+
             const errTxt = await res.text().catch(() => '');
-            throw new Error(`ElevenLabs ${res.status}: ${errTxt.slice(0, 200)}`);
+            lastErr = new Error(`ElevenLabs ${res.status}: ${errTxt.slice(0, 200)}`);
+
+            // Model rejected language_code after all → drop it and retry once.
+            if (res.status === 400 && payload.language_code && /language/i.test(errTxt)) {
+                warn('model rejected language_code — retrying without it');
+                delete payload.language_code;
+                continue;
+            }
+            // Retry on rate limit / server errors; other 4xx are permanent.
+            if (res.status !== 429 && res.status < 500) break;
+            warn(`synth attempt ${attempt}/${MAX_ATTEMPTS} failed:`, lastErr.message);
+            if (attempt < MAX_ATTEMPTS) await new Promise(r => setTimeout(r, attempt * 1500));
         }
-        const buf = Buffer.from(await res.arrayBuffer());
-        return buf;
+
+        throw lastErr || new Error('synthesis failed');
     }
 
     /** Keep only the most recent N audio files on disk. */
@@ -763,6 +939,7 @@ class TTSEngine {
 
     status() {
         return {
+            channel:          this.channel,
             elevenConfigured: !!this.elevenKey,
             twitchConfigured: !!(this.clientId && this.clientSecret),
             twitchClientIdPrefix: this.clientId ? `${this.clientId.slice(0, 6)}...` : '',
@@ -781,18 +958,173 @@ class TTSEngine {
         return this.history.slice(-limit).reverse().map(e => this._publicHistEntry(e));
     }
 
-    // Called once at server startup.
+    // Called once at server startup (voices are loaded by the manager).
     async boot() {
-        if (this.elevenKey) await this.loadVoices();
+        // Bring back anything that was still queued when the server stopped.
+        this._restoreQueue();
         if (this.tokens && this.tokens.refresh) {
             await this.refreshAccessToken();
             await this._validateAndStore().catch(() => {});
             this.persistTokens();
             this.startEventSub();
         } else {
-            log('Not yet authorized with Twitch. Open /api/tts/oauth/start to connect.');
+            log(`[${this.channel}] not yet authorized with Twitch. Open /api/tts/oauth/start?channel=${this.channel} to connect.`);
         }
     }
 }
 
-module.exports = { TTSEngine, SCOPES };
+// ─────────────────────────────────────────────────────────────────────────────
+//  TTSManager — one TTSEngine per streamer (per account with ttsAccess).
+//  Owns the shared ElevenLabs voice cache and routes API calls / events to the
+//  right channel's engine. Also migrates legacy single-user files on boot.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class TTSManager {
+    /**
+     * @param {object} opts
+     * @param {string} opts.root        project root dir
+     * @param {function} opts.broadcast (channel, payload) => void — SSE push
+     */
+    constructor({ root, broadcast }) {
+        this.root      = root;
+        this.confDir   = path.join(root, 'conf');
+        this.broadcastAll = broadcast || (() => {});
+        this.elevenKey = (process.env.ELEVENLABS_API_KEY || '').trim();
+        this.voices    = []; // shared [{ id, name }]
+        this.engines   = new Map(); // channelKey → TTSEngine
+    }
+
+    get accounts() {
+        const a = readJSON(path.join(this.confDir, 'accounts.json'), { accounts: [] });
+        return Array.isArray(a.accounts) ? a.accounts : [];
+    }
+
+    /** Channels (lowercase) that are allowed to use TTS. */
+    ttsChannels() {
+        return [...new Set(this.accounts
+            .filter(a => a && a.ttsAccess && a.channel)
+            .map(a => String(a.channel).toLowerCase()))];
+    }
+
+    engineFor(channel) {
+        const key = String(channel || '').toLowerCase().trim();
+        if (!key) return null;
+        if (!this.engines.has(key)) {
+            this.engines.set(key, new TTSEngine({
+                root:      this.root,
+                channel:   key,
+                manager:   this,
+                broadcast: (payload) => this.broadcastAll(key, payload),
+            }));
+        }
+        return this.engines.get(key);
+    }
+
+    /** Resolve an engine from a ?channel= param; falls back to the only TTS
+     *  channel if exactly one exists (keeps old single-user URLs working).
+     *  Only channels whose account has ttsAccess resolve to an engine. */
+    resolveEngine(channelParam) {
+        const chans = this.ttsChannels();
+        const key = String(channelParam || '').toLowerCase().trim();
+        if (key) return chans.includes(key) ? this.engineFor(key) : null;
+        return chans.length === 1 ? this.engineFor(chans[0]) : null;
+    }
+
+    /** OAuth callbacks carry only code+state — find the engine that issued the state. */
+    async handleOAuthCallback(code, state) {
+        for (const eng of this.engines.values()) {
+            if (state && eng._oauthState === state) return eng.handleOAuthCallback(code, state);
+        }
+        return { ok: false, error: 'Unknown or expired state — retry the Connect button from the config page.' };
+    }
+
+    // ── Shared voice cache ───────────────────────────────────────────────────
+    async loadVoices() {
+        if (!this.elevenKey) { warn('No ELEVENLABS_API_KEY — voices unavailable.'); return []; }
+        try {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), 15000);
+            let res;
+            try {
+                res = await fetch(`${ELEVEN_API}/voices`, {
+                    headers: { 'xi-api-key': this.elevenKey },
+                    signal: ctrl.signal,
+                });
+            } finally { clearTimeout(t); }
+            if (!res.ok) { warn('voices fetch failed', res.status); return this.voices; }
+            const data = await res.json();
+            this.voices = (data.voices || []).map(v => ({ id: v.voice_id, name: v.name }));
+            log('loaded', this.voices.length, 'ElevenLabs voices');
+            return this.voices;
+        } catch (e) { warn('voices error:', e.message); return this.voices; }
+    }
+
+    // ── Legacy migration (single global tts config / tokens.json) ────────────
+    _migrateLegacy() {
+        const chans = this.ttsChannels();
+
+        // 1) config.tts flat → keyed per channel (every TTS channel gets a copy).
+        try {
+            const cfgFile = path.join(this.confDir, 'config.json');
+            const all = readJSON(cfgFile, null);
+            const tts = all && all.tts;
+            const isFlat = tts && (tts.bits || tts.appearance || tts.defaultVoice !== undefined);
+            if (isFlat && chans.length) {
+                const keyed = {};
+                for (const ch of chans) keyed[ch] = JSON.parse(JSON.stringify(tts));
+                all.tts = keyed;
+                writeJSON(cfgFile, all);
+                log(`migrated legacy tts config → per-channel (${chans.join(', ')})`);
+            }
+        } catch (e) { warn('config migration failed:', e.message); }
+
+        // 2) legacy conf/tokens.json → conf/tokens.<channel>.json
+        try {
+            const legacyTok = path.join(this.confDir, 'tokens.json');
+            if (fs.existsSync(legacyTok)) {
+                const tok = readJSON(legacyTok, null);
+                const login = tok && tok.login ? String(tok.login).toLowerCase() : null;
+                const target = login && chans.includes(login) ? login : (chans.length === 1 ? chans[0] : null);
+                if (target) {
+                    const dest = path.join(this.confDir, `tokens.${target.replace(/[^a-z0-9_-]/g, '_')}.json`);
+                    if (!fs.existsSync(dest)) writeJSON(dest, tok);
+                    fs.renameSync(legacyTok, legacyTok + '.bak');
+                    log(`migrated legacy tokens.json → channel "${target}"`);
+                }
+            }
+        } catch (e) { warn('token migration failed:', e.message); }
+
+        // 3) legacy conf/tts-queue.json → per-channel queue file
+        try {
+            const legacyQ = path.join(this.confDir, 'tts-queue.json');
+            if (fs.existsSync(legacyQ) && chans.length === 1) {
+                const dest = path.join(this.confDir, `tts-queue.${chans[0].replace(/[^a-z0-9_-]/g, '_')}.json`);
+                if (!fs.existsSync(dest)) fs.renameSync(legacyQ, dest);
+                else fs.unlinkSync(legacyQ);
+            }
+        } catch (e) { warn('queue migration failed:', e.message); }
+    }
+
+    // ── Boot: voices once, then one engine per TTS-enabled account ───────────
+    async boot() {
+        this._migrateLegacy();
+
+        if (this.elevenKey) {
+            await this.loadVoices();
+            // Retry shortly if the first load failed; refresh hourly so
+            // renamed/new voices stay resolvable.
+            if (!this.voices.length) setTimeout(() => this.loadVoices().catch(() => {}), 30000);
+            const t = setInterval(() => this.loadVoices().catch(() => {}), 60 * 60 * 1000);
+            if (t.unref) t.unref();
+        }
+
+        const chans = this.ttsChannels();
+        if (!chans.length) { log('no accounts with ttsAccess — TTS idle.'); return; }
+        for (const ch of chans) {
+            const eng = this.engineFor(ch);
+            await eng.boot().catch(e => warn(`[${ch}] boot error:`, e.message));
+        }
+    }
+}
+
+module.exports = { TTSEngine, TTSManager, SCOPES };
