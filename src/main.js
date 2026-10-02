@@ -9,7 +9,8 @@ const rawToken   = params.get('token') || '';
 const oauthToken = rawToken.replace(/^oauth:/i, ''); // strip prefix if present
 
 const chatContainer = document.querySelector('.chat');
-const MAX_MESSAGES  = 10;
+const MAX_MESSAGES_DEFAULT = 10;
+let   maxMessages          = MAX_MESSAGES_DEFAULT; // configurable via conf/config.json
 
 let overlaySlideDirection = 'right';
 let overlayBubbleImages   = [];
@@ -408,7 +409,7 @@ function addMessage(msg) {
     row.appendChild(msgBox);
     chatContainer.appendChild(row);
 
-    while (chatContainer.children.length > MAX_MESSAGES) {
+    while (chatContainer.children.length > maxMessages) {
         chatContainer.removeChild(chatContainer.firstChild);
     }
 }
@@ -449,6 +450,9 @@ function applyOverlayConfig() {
     // Update slide direction and bubble images for future messages
     overlaySlideDirection = cfg.slideDirection || 'right';
     overlayBubbleImages   = Array.isArray(cfg.bubbleImages) ? cfg.bubbleImages : [];
+    if (Number.isInteger(cfg.maxMessages) && cfg.maxMessages >= 1) {
+        maxMessages = cfg.maxMessages;
+    }
 
     let css = '';
 
@@ -467,6 +471,10 @@ function applyOverlayConfig() {
         css += `.message-box { background-image: url("${cfg.bubbleImage}") !important; background-size: cover !important; background-position: center !important; }\n`;
     if (cfg.fontSize)
         css += `body { font-size: ${cfg.fontSize}px !important; }\n`;
+    if (cfg.msgBoxMaxWidth)
+        css += `.message-box { max-width: ${cfg.msgBoxMaxWidth}px !important; }\n`;
+    if (cfg.emoteOnlySize)
+        css += `.emote-only .emote { height: ${cfg.emoteOnlySize}em !important; }\n`;
     if (cfg.nameBubbleMarginLeft != null)
         css += `.username-row { margin-left: ${cfg.nameBubbleMarginLeft}px !important; }\n`;
     if (cfg.nameBubbleMarginBottom != null)

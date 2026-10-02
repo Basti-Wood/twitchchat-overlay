@@ -12,6 +12,9 @@ const DEFAULT_CONFIG = {
     nameBubbleMarginLeft:   8,
     nameBubbleMarginBottom: -12,
     msgBubbleMarginLeft:    20,
+    msgBoxMaxWidth:         null, // null = no max width
+    maxMessages:            10,
+    emoteOnlySize:          3,    // em-height multiplier for emote-only messages
     slideDirection:         'right',
     bubbleImages:           [],
     customCSS:              '',
@@ -57,6 +60,9 @@ function buildGeneratedCSS() {
     lines.push(`    color: ${cfg.textColor};`);
     lines.push(`    font-size: ${cfg.fontSize}px;`);
     lines.push(`    margin-left: ${cfg.msgBubbleMarginLeft}px;`);
+    if (cfg.msgBoxMaxWidth) {
+        lines.push(`    max-width: ${cfg.msgBoxMaxWidth}px;`);
+    }
     if (cfg.bubbleImages && cfg.bubbleImages.length > 0) {
         lines.push(`    /* background-image: random from ${cfg.bubbleImages.length} image(s) — applied per-message via JS */`);
         lines.push('    background-size: cover;');
@@ -71,6 +77,10 @@ function buildGeneratedCSS() {
     lines.push('.username-row {');
     lines.push(`    margin-left: ${cfg.nameBubbleMarginLeft}px;`);
     lines.push(`    margin-bottom: ${cfg.nameBubbleMarginBottom}px;`);
+    lines.push('}');
+    lines.push('');
+    lines.push('.emote-only .emote {');
+    lines.push(`    height: ${cfg.emoteOnlySize}em;`);
     lines.push('}');
     if (cfg.fontFamily === '__custom__' && cfg.customFontName) {
         lines.push('');
@@ -298,6 +308,9 @@ function populateForm() {
     document.getElementById('cfg-name-ml').value        = currentConfig.nameBubbleMarginLeft;
     document.getElementById('cfg-name-mb').value        = currentConfig.nameBubbleMarginBottom;
     document.getElementById('cfg-msg-ml').value         = currentConfig.msgBubbleMarginLeft;
+    document.getElementById('cfg-msg-maxw').value       = currentConfig.msgBoxMaxWidth ?? '';
+    document.getElementById('cfg-max-msgs').value       = currentConfig.maxMessages;
+    document.getElementById('cfg-emote-size').value     = currentConfig.emoteOnlySize;
     document.getElementById('cfg-slide-dir').value      = currentConfig.slideDirection || 'right';
 
     document.getElementById('cfg-font-label').textContent =
@@ -358,6 +371,16 @@ function parseCSSToConfig(cssText) {
 
         const ml = block.match(/margin-left\s*:\s*([\d.-]+)px/);
         if (ml) updates.msgBubbleMarginLeft = parseFloat(ml[1]);
+
+        const mw = block.match(/max-width\s*:\s*([\d.]+)px/);
+        if (mw) updates.msgBoxMaxWidth = parseFloat(mw[1]);
+    }
+
+    // .emote-only .emote { … }
+    const emoMatch = cssText.match(/\.emote-only\s+\.emote\s*\{([^}]*)\}/s);
+    if (emoMatch) {
+        const h = emoMatch[1].match(/height\s*:\s*([\d.]+)em/);
+        if (h) updates.emoteOnlySize = parseFloat(h[1]);
     }
 
     // .username-row { … }
@@ -476,6 +499,24 @@ function setupControls() {
     });
     document.getElementById('cfg-msg-ml').addEventListener('input', e => {
         currentConfig.msgBubbleMarginLeft = parseInt(e.target.value);
+        saveConfig();
+    });
+
+    document.getElementById('cfg-msg-maxw').addEventListener('input', e => {
+        const v = parseInt(e.target.value);
+        currentConfig.msgBoxMaxWidth = Number.isInteger(v) && v > 0 ? v : null;
+        saveConfig();
+    });
+
+    document.getElementById('cfg-max-msgs').addEventListener('input', e => {
+        const v = parseInt(e.target.value);
+        currentConfig.maxMessages = Number.isInteger(v) && v >= 1 ? v : DEFAULT_CONFIG.maxMessages;
+        saveConfig();
+    });
+
+    document.getElementById('cfg-emote-size').addEventListener('input', e => {
+        const v = parseFloat(e.target.value);
+        currentConfig.emoteOnlySize = Number.isFinite(v) && v > 0 ? v : DEFAULT_CONFIG.emoteOnlySize;
         saveConfig();
     });
 

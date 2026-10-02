@@ -174,6 +174,23 @@
                     <label for="cfg-msg-ml">Message indent (px)</label>
                     <input type="number" id="cfg-msg-ml" value="20">
                 </div>
+
+                <div class="config-field">
+                    <label for="cfg-msg-maxw">Message max width (px)</label>
+                    <input type="number" id="cfg-msg-maxw" min="0" placeholder="unlimited">
+                    <span class="hint">Leave empty for no maximum width.</span>
+                </div>
+
+                <div class="config-field">
+                    <label for="cfg-max-msgs">Max messages shown</label>
+                    <input type="number" id="cfg-max-msgs" min="1" value="10">
+                </div>
+
+                <div class="config-field">
+                    <label for="cfg-emote-size">Emote-only size (em)</label>
+                    <input type="number" id="cfg-emote-size" min="0.5" step="0.1" value="3">
+                    <span class="hint">Emote height when a message contains only emotes.</span>
+                </div>
             </div>
 
                 <button class="btn-reset" id="cfg-reset">↺ Reset to defaults</button>
