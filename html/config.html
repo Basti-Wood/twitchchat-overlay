@@ -43,7 +43,7 @@
     <div class="config-main">
 
         <!-- Left: settings -->
-        <aside class="config-panel">
+        <aside class="config-panel" id="panel-left">
             <div>
                 <div class="config-section-title">Connection</div>
 
@@ -52,20 +52,10 @@
                     <input type="text" id="channel-input" placeholder="yourchannelname"
                            autocomplete="off" spellcheck="false">
                 </div>
-
-                <div class="config-field">
-                    <label for="token-input">
-                        OAuth Token <span class="badge-optional"></span>
-                    </label>
-                    <input type="password" id="token-input" placeholder="oauth:xxxxxxxxxx"
-                           autocomplete="off" spellcheck="false">
-                    <span class="hint">
-                        Needed for subscriber &amp; bits badges.<br>
-                        Get one at <a href="https://twitchtokengenerator.com/" target="_blank">twitchtokengenerator.com</a>
-                    </span>
-                </div>
             </div>
         </aside>
+
+        <div class="panel-resizer" id="resizer-left" title="Drag to resize"></div>
 
         <!-- Center: preview (live iframe of chat.html) -->
         <div class="config-preview">
@@ -73,8 +63,10 @@
             <iframe id="preview-frame" class="preview-frame" src="chat.html" title="Chat preview"></iframe>
         </div>
 
+        <div class="panel-resizer" id="resizer-right" title="Drag to resize"></div>
+
         <!-- Right: style config -->
-        <aside class="config-panel config-panel--right">
+        <aside class="config-panel config-panel--right" id="panel-right">
 
             <div class="panel-tabs">
                 <button class="panel-tab active" data-tab="style">Style</button>

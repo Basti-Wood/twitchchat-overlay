@@ -112,7 +112,7 @@ class TTSEngine {
         this._current   = null;   // the item currently playing (history entry)
 
         // CSRF state for the OAuth round-trip
-        this._oauthState = null;
+        this._oauthStates = new Map(); // state → { redirectUri, at }
         this._oauthRedirectUri = null;
     }
 
@@ -180,14 +180,17 @@ class TTSEngine {
     /** URL the streamer visits once to grant the scopes. */
     buildAuthUrl(redirectUriOverride) {
         if (!this.clientId) return null;
-        this._oauthState = Math.random().toString(36).slice(2) + Date.now().toString(36);
-        this._oauthRedirectUri = redirectUriOverride || this.redirectUri;
+        const state = require('crypto').randomBytes(16).toString('hex');
+        const redirectUri = redirectUriOverride || this.redirectUri;
+        const now = Date.now();
+        for (const [s, v] of this._oauthStates) if (now - v.at > 30 * 60 * 1000) this._oauthStates.delete(s);
+        this._oauthStates.set(state, { redirectUri, at: now });
         const p = new URLSearchParams({
             client_id:     this.clientId,
-            redirect_uri:  this._oauthRedirectUri,
+            redirect_uri:  redirectUri,
             response_type: 'code',
             scope:         SCOPES.join(' '),
-            state:         this._oauthState,
+            state,
             force_verify:  'true',
         });
         return `${TWITCH_OAUTH}/authorize?${p.toString()}`;
@@ -196,7 +199,9 @@ class TTSEngine {
     /** Handle the ?code=…&state=… redirect. Returns { ok, error? }. */
     async handleOAuthCallback(code, state) {
         if (!code)                       return { ok: false, error: 'Missing code' };
-        if (state !== this._oauthState)  return { ok: false, error: 'State mismatch (possible CSRF) — retry the authorize link' };
+        const pending = this._oauthStates.get(state);
+        if (!pending) return { ok: false, error: 'State mismatch (possible CSRF) — retry the authorize link' };
+        this._oauthStates.delete(state);
 
         try {
             const body = new URLSearchParams({
@@ -204,7 +209,7 @@ class TTSEngine {
                 client_secret: this.clientSecret,
                 code,
                 grant_type:    'authorization_code',
-                redirect_uri:  this._oauthRedirectUri || this.redirectUri,
+                redirect_uri:  pending.redirectUri,
             });
             const res = await fetch(`${TWITCH_OAUTH}/token`, {
                 method: 'POST',
@@ -1044,7 +1049,7 @@ class TTSManager {
     /** OAuth callbacks carry only code+state — find the engine that issued the state. */
     async handleOAuthCallback(code, state) {
         for (const eng of this.engines.values()) {
-            if (state && eng._oauthState === state) return eng.handleOAuthCallback(code, state);
+            if (state && eng._oauthStates.has(state)) return eng.handleOAuthCallback(code, state);
         }
         return { ok: false, error: 'Unknown or expired state — retry the Connect button from the config page.' };
     }

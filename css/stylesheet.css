@@ -85,9 +85,9 @@ body {
     line-height: 1.4;
 }
 
-.badge {
-    width: 18px;
-    height: 18px;
+.chat-badge {
+    width: 1.3em;
+    height: 1.3em;
     object-fit: contain;
     vertical-align: middle;
     flex-shrink: 0;
@@ -114,6 +114,14 @@ body {
 
 .emote-only .emote {
     height: 3em;
+}
+
+/* Emote-only message: the bubble hugs the emote(s) exactly (no dead space) */
+.message-box.emote-only {
+    padding: 4px;
+    min-width: 0;
+    max-width: none !important;
+    line-height: 1;
 }
 
 /* ── Config page ──────────────────────────────────────────── */
@@ -177,6 +185,26 @@ body.config-page {
     display: flex;
     flex: 1;
     overflow: hidden;
+}
+
+/* Draggable dividers between the settings panels and the preview */
+.panel-resizer {
+    width: 6px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    background: transparent;
+    transition: background 0.15s;
+}
+.panel-resizer:hover,
+.panel-resizer.dragging {
+    background: #9146ff;
+}
+body.resizing {
+    cursor: col-resize;
+    user-select: none;
+}
+body.resizing .preview-frame {
+    pointer-events: none;
 }
 
 .config-panel {

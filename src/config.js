@@ -582,12 +582,12 @@ function setupControls() {
 
 // ── Init ──────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
-    await window.authReady;
+    await window.authReady;
+
     const stored = sessionStorage.getItem('account');
     if (stored) {
         const account = JSON.parse(stored);
-        if (account.channel)    document.getElementById('channel-input').value = account.channel;
-        if (account.oauthToken) document.getElementById('token-input').value   = account.oauthToken;
+        if (account.channel) document.getElementById('channel-input').value = account.channel;
     }
 
     loadConfig();
@@ -598,32 +598,59 @@ document.addEventListener('DOMContentLoaded', async () => {
         injectDemoMessages();
     });
 
-    // Update iframe src based on channel / token inputs
+    // Update iframe src based on the channel input
     updatePreviewSrc();
     document.getElementById('channel-input').addEventListener('change', updatePreviewSrc);
-    document.getElementById('token-input').addEventListener('change', updatePreviewSrc);
-    document.getElementById('token-input').addEventListener('change', (e) => {
-        fetch('/api/me/token', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: e.target.value.trim() }),
-        }).catch(() => {});
-    });
+
+    setupPanelResizers();
 });
-// ── Update preview iframe src with current channel + token ───
+// ── Update preview iframe src with the current channel ───
 function updatePreviewSrc() {
     const channel = document.getElementById('channel-input').value.trim().toLowerCase();
-    const token   = document.getElementById('token-input').value.trim();
     const frame   = document.getElementById('preview-frame');
     if (!frame) return;
     const params = new URLSearchParams();
     if (channel) params.set('channel', channel);
-    if (token)   params.set('token', token);
     const qs     = params.toString();
     const newSrc = 'chat.html' + (qs ? '?' + qs : '');
     // Only reload if src actually changed
     if (frame.src !== new URL(newSrc, window.location.href).href) {
         frame.src = newSrc;
+    }
+}
+
+// ── Draggable side panels: drag the divider to make a sidebar wider ──
+function setupPanelResizers() {
+    const config = [
+        { handle: 'resizer-left',  panel: 'panel-left'  },
+        { handle: 'resizer-right', panel: 'panel-right' },
+    ];
+    for (const { handle, panel } of config) {
+        const h = document.getElementById(handle);
+        const p = document.getElementById(panel);
+        if (!h || !p) continue;
+        h.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            const startX = e.clientX;
+            const startW = p.getBoundingClientRect().width;
+            const isRight = handle === 'resizer-right';
+            document.body.classList.add('resizing');
+            h.classList.add('dragging');
+            const onMove = (ev) => {
+                const dx = ev.clientX - startX;
+                let w = isRight ? startW - dx : startW + dx;
+                w = Math.min(Math.max(w, 220), window.innerWidth * 0.6);
+                p.style.width = w + 'px';
+            };
+            const onUp = () => {
+                document.body.classList.remove('resizing');
+                h.classList.remove('dragging');
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
     }
 }
 
@@ -760,12 +787,10 @@ function flashSaveBtn(label) {
 // ── Copy overlay link ─────────────────────────────────────
 function copyLink() {
     const channel = document.getElementById('channel-input').value.trim();
-    const token   = document.getElementById('token-input').value.trim();
 
     const chatUrl = new URL('chat.html', window.location.href);
     const params  = new URLSearchParams();
     if (channel) params.set('channel', channel);
-    if (token)   params.set('token', token);
     chatUrl.search = params.toString();
 
     navigator.clipboard.writeText(chatUrl.toString()).then(() => {

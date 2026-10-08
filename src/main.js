@@ -1,12 +1,6 @@
-﻿// Read channel from URL: add ?channel=yourchannelname to the browser source URL
-// For full badge support (subscriber tiers, bits, founder…) also add:
-//   &token=YOUR_OAUTH_TOKEN
-// Get a free token at https://twitchapps.com/tmi/ — paste the whole thing
-// (with or without the 'oauth:' prefix).
+﻿// Read channel from URL: add ?channel=yourchannelname to the browser source URL.
 const params = new URLSearchParams(window.location.search);
 const channel    = (params.get('channel') || '').toLowerCase();
-const rawToken   = params.get('token') || '';
-const oauthToken = rawToken.replace(/^oauth:/i, ''); // strip prefix if present
 
 const chatContainer = document.querySelector('.chat');
 const MAX_MESSAGES_DEFAULT = 10;
@@ -16,26 +10,23 @@ let overlaySlideDirection = 'right';
 let overlayBubbleImages   = [];
 let last_image_used       = null;
 
-// Auth state — populated by initAuth() when a token is provided
-let authHeaders  = null;
-// Helix badge map: 'setId/version' -> image URL (populated from Twitch API)
+// Badge map: 'setId/version' -> image URL (populated via /api/twitch/badges)
 const helixBadgeMap = new Map();
 
-// === Badge image URLs (static-cdn.jtvnw.net — no API needed, verified working) ===
-// badges.twitch.tv is decommissioned; the Helix API requires OAuth.
-// All UUIDs below were verified against the CDN on 2026-05-16.
+// === Badge image URLs (static-cdn.jtvnw.net) — fallback when the badge proxy
+//     (/api/twitch/badges) is unavailable. All UUIDs verified against the CDN. ===
 const BADGE_URLS = {
-    'broadcaster/1':  'https://static-cdn.jtvnw.net/badges/v1/5527c58c-fb7d-422d-b71b-f309dcb85cc1/2',
-    'moderator/1':    'https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2',
-    'vip/1':          'https://static-cdn.jtvnw.net/badges/v1/b817aba4-fad8-49e2-b88a-7cc744dfa6ec/2',
-    'partner/1':      'https://static-cdn.jtvnw.net/badges/v1/d12a2e27-16f6-41d0-ab77-b780518f00a3/2',
-    'turbo/1':        'https://static-cdn.jtvnw.net/badges/v1/bd444ec6-8f34-4bf9-91f4-af1e3428d80f/2',
-    'premium/1':      'https://static-cdn.jtvnw.net/badges/v1/a1dd5073-19c3-4911-8cb4-c464a7bc1510/2',
-    'global_mod/1':   'https://static-cdn.jtvnw.net/badges/v1/9ef7e029-4cdf-4d4d-a0d5-e2b3fb2583fe/2',
-    'artist-badge/1': 'https://static-cdn.jtvnw.net/badges/v1/4300a897-03dc-4e83-8c0e-c332fee7057f/2',
+    'broadcaster/1':  'https://static-cdn.jtvnw.net/badges/v1/5527c58c-fb7d-422d-b71b-f309dcb85cc1/3',
+    'moderator/1':    'https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/3',
+    'vip/1':          'https://static-cdn.jtvnw.net/badges/v1/b817aba4-fad8-49e2-b88a-7cc744dfa6ec/3',
+    'partner/1':      'https://static-cdn.jtvnw.net/badges/v1/d12a2e27-16f6-41d0-ab77-b780518f00a3/3',
+    'turbo/1':        'https://static-cdn.jtvnw.net/badges/v1/bd444ec6-8f34-4bf9-91f4-af1e3428d80f/3',
+    'premium/1':      'https://static-cdn.jtvnw.net/badges/v1/a1dd5073-19c3-4911-8cb4-c464a7bc1510/3',
+    'global_mod/1':   'https://static-cdn.jtvnw.net/badges/v1/9ef7e029-4cdf-4d4d-a0d5-e2b3fb2583fe/3',
+    'artist-badge/1': 'https://static-cdn.jtvnw.net/badges/v1/4300a897-03dc-4e83-8c0e-c332fee7057f/3',
     // Subscriber: channel-custom badges can't be fetched without OAuth,
     // so any subscriber version falls back to this generic badge.
-    'subscriber/0':   'https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2',
+    'subscriber/0':   'https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/3',
 };
 
 const emoteMap = new Map(); // word -> image URL
@@ -150,41 +141,20 @@ function parseIRC(raw) {
 // === Badge auth + Helix loading ===
 
 /**
- * Validate the OAuth token and extract the client_id Twitch paired it with.
- * Populates authHeaders so Helix calls can be made.
+ * Fetch badge data through the server's badge proxy (which uses the app's
+ * own Twitch credentials, so no user OAuth token is needed) and populate
+ * helixBadgeMap. Handles both global and channel-specific badges.
  */
-async function initAuth() {
-    if (!oauthToken) return;
+async function loadBadgesFromServer(broadcasterId) {
     try {
-        const res = await fetch('https://id.twitch.tv/oauth2/validate', {
-            headers: { 'Authorization': `OAuth ${oauthToken}` },
-        });
-        if (!res.ok) { console.warn('Badge token validation failed — badges will use fallback images.'); return; }
-        const { client_id } = await res.json();
-        authHeaders = {
-            'Authorization': `Bearer ${oauthToken}`,
-            'Client-Id': client_id,
-        };
-        console.log('Twitch badge auth ready');
-    } catch (e) { console.warn('Auth init failed:', e); }
-}
-
-/**
- * Fetch badge data from a Helix endpoint and populate helixBadgeMap.
- * Works for both /global and /channel (broadcaster_id) endpoints.
- */
-async function loadHelixBadges(url) {
-    if (!authHeaders) return;
-    try {
-        const res = await fetch(url, { headers: authHeaders });
+        const qs = broadcasterId ? `?broadcaster_id=${encodeURIComponent(broadcasterId)}` : '';
+        const res = await fetch('/api/twitch/badges' + qs);
         if (!res.ok) return;
-        const { data } = await res.json();
-        for (const set of data) {
-            for (const v of set.versions) {
-                helixBadgeMap.set(`${set.set_id}/${v.id}`, v.image_url_2x);
-            }
+        const { badges } = await res.json();
+        for (const [key, url] of Object.entries(badges || {})) {
+            helixBadgeMap.set(key, url);
         }
-    } catch (e) { console.warn('Helix badge load failed:', e); }
+    } catch (e) { console.warn('Badge proxy load failed:', e); }
 }
 
 // === Badge lookup ===
@@ -278,7 +248,7 @@ function renderBadges(badges) {
         const img = document.createElement('img');
         img.src = url;
         img.alt = setId;
-        img.className = 'badge';
+        img.className = 'chat-badge';
         frag.appendChild(img);
     }
     return frag;
@@ -528,10 +498,8 @@ async function init() {
         await loadConfigFile();
         applyOverlayConfig();
     }, 3000);
-    await initAuth();
-
     await Promise.allSettled([
-        loadHelixBadges('https://api.twitch.tv/helix/chat/badges/global'),
+        loadBadgesFromServer(null), // global badges
         loadBTTVGlobal(),
         loadFFZGlobal(),
         loadFFZChannel(channel),
@@ -562,7 +530,7 @@ function connect() {
 
             if (parsed.type === 'roomstate' && parsed.roomId) {
                 Promise.allSettled([
-                    loadHelixBadges(`https://api.twitch.tv/helix/chat/badges?broadcaster_id=${parsed.roomId}`),
+                    loadBadgesFromServer(parsed.roomId),
                     loadBTTVChannel(parsed.roomId),
                     load7TVChannel(parsed.roomId),
                 ]);

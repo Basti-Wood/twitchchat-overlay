@@ -168,6 +168,75 @@ function broadcast(channel, payload) {
 const tts = new TTSManager({ root: DATA_DIR, broadcast, getAccounts: () => auth.accounts() });
 tts.boot().catch(e => console.error('[tts] boot error:', e.message));
 
+// ── Twitch badge proxy ──────────────────────────────────────────────────────
+// The overlay needs badge image URLs (subscriber tiers, bits, founder, …) that
+// the Helix API only returns with a token. We use the app's OWN client-credentials
+// token here, so streamers don't need to paste a user OAuth token anywhere.
+let twitchAppToken = { access_token: null, expires_at: 0 };
+
+async function getTwitchAppToken() {
+    if (twitchAppToken.access_token && twitchAppToken.expires_at > Date.now() + 60 * 1000) {
+        return twitchAppToken.access_token;
+    }
+    const clientId     = (process.env.TWITCH_CLIENT_ID || '').trim();
+    const clientSecret = (process.env.TWITCH_CLIENT_SECRET || '').trim();
+    if (!clientId || !clientSecret) return null;
+    try {
+        const res = await fetch('https://id.twitch.tv/oauth2/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                client_id: clientId,
+                client_secret: clientSecret,
+                grant_type: 'client_credentials',
+            }),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        twitchAppToken = {
+            access_token: data.access_token,
+            expires_at: Date.now() + (data.expires_in || 3600) * 1000,
+        };
+        return data.access_token;
+    } catch {
+        return null;
+    }
+}
+
+const badgeCache = new Map(); // key -> { expires, data }
+
+async function fetchTwitchBadges(broadcasterId) {
+    const token = await getTwitchAppToken();
+    if (!token) return {};
+    const key = broadcasterId || 'global';
+    const cached = badgeCache.get(key);
+    if (cached && cached.expires > Date.now()) return cached.data;
+
+    const headers = {
+        Authorization: `Bearer ${token}`,
+        'Client-Id': process.env.TWITCH_CLIENT_ID || '',
+    };
+    const urls = broadcasterId
+        ? [`https://api.twitch.tv/helix/chat/badges?broadcaster_id=${encodeURIComponent(broadcasterId)}`]
+        : ['https://api.twitch.tv/helix/chat/badges/global'];
+
+    const map = {};
+    for (const url of urls) {
+        try {
+            const res = await fetch(url, { headers });
+            if (!res.ok) continue;
+            const { data } = await res.json();
+            for (const set of data) {
+                for (const v of set.versions) {
+                    map[`${set.set_id}/${v.id}`] = v.image_url_2x || v.image_url_1x;
+                }
+            }
+        } catch { /* skip */ }
+    }
+    badgeCache.set(key, { expires: Date.now() + 30 * 60 * 1000, data: map });
+    return map;
+}
+
 const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -236,6 +305,13 @@ const server = http.createServer(async (req, res) => {
         let data; try { data = JSON.parse(await readBody(req)); } catch { return sendJSON(res, 400, { ok: false, error: 'Bad JSON' }); }
         auth.setOwnToken(u.id, data.token);
         return sendJSON(res, 200, { ok: true });
+    }
+
+    // ── Badge proxy: global + channel badges (no user token needed) ────────
+    if (req.method === 'GET' && pathname === '/api/twitch/badges') {
+        const bid = (urlObj.searchParams.get('broadcaster_id') || '').trim();
+        const badges = await fetchTwitchBadges(bid);
+        return sendJSON(res, 200, { ok: true, badges });
     }
 
     if (pathname === '/api/admin/users' && req.method === 'GET') {
@@ -383,7 +459,13 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && pathname === '/api/tts/oauth/callback') {
         const code  = urlObj.searchParams.get('code');
         const state = urlObj.searchParams.get('state');
-        const result = await tts.handleOAuthCallback(code, state);
+        const twitchErr = urlObj.searchParams.get('error_description') || urlObj.searchParams.get('error');
+        const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        const expectedUri = (process.env.TWITCH_REDIRECT_URI || '').trim();
+        const result = twitchErr
+            ? { ok: false, error: esc(twitchErr) + ' — make sure the Twitch app\'s OAuth Redirect URL exactly matches TWITCH_REDIRECT_URI in .env.' +
+                (expectedUri ? ` This server sent: <code>${esc(expectedUri)}</code>` : '') }
+            : await tts.handleOAuthCallback(code, state);
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         if (result.ok) {
             res.end(`<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;background:#36363f;color:#eee;padding:40px">
