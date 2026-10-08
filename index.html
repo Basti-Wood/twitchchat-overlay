@@ -3,24 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login</title>
-    <link rel="stylesheet" href="../css/stylesheet.css">
+    <title>Chat Overlay — Login</title>
+    <link rel="stylesheet" href="/css/stylesheet.css">
 </head>
-<body style="background-color: rgb(54, 54, 63);">
+<body class="login-page">
     <div class="login-container">
-        <h1>Login</h1>
-        <form id="login-form">
-            <label for="username">Username:</label>
-            <input type="text" id="username" name="username" required>
+        <div class="login-logo">
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M11.64 5.93h1.43v4.28h-1.43m3.93-4.28H17v4.28h-1.43M7 2L3.43 5.57v12.86h4.28V22l3.58-3.57h2.85L20.57 12V2m-1.43 9.29-2.85 2.85h-2.86l-2.5 2.5v-2.5H7.71V3.43h11.43z"/>
+            </svg>
+        </div>
+        <h1>Twitch Chat Overlay</h1>
+        <p class="sub">Sign in with your Twitch account to configure your overlay.</p>
 
-            <label for="password">Password:</label>
-            <input type="password" id="password" name="password" required>
+        <div id="login-notice" class="login-notice" hidden></div>
 
-            <button type="submit">Login</button>
-        </form>
-        <p id="login-message"></p>
+        <a class="btn-twitch" href="/auth/twitch/login">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M11.64 5.93h1.43v4.28h-1.43m3.93-4.28H17v4.28h-1.43M7 2L3.43 5.57v12.86h4.28V22l3.58-3.57h2.85L20.57 12V2m-1.43 9.29-2.85 2.85h-2.86l-2.5 2.5v-2.5H7.71V3.43h11.43z"/>
+            </svg>
+            Login with Twitch
+        </a>
     </div>
 
-    <script src="../src/login.js"></script>
+    <script src="/src/login.js"></script>
 </body>
 </html>

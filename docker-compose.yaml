@@ -11,18 +11,26 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./conf:/app/conf
-      - ./uploads:/app/uploads
+      # ALL user data (uploads, config, users, tokens) is stored on YOUR drive, not in the container.
+      # Set DATA_PATH in .env to any host folder (e.g. D:/overlay-data); default is ./data
+      - ${DATA_PATH:-./data}:/data
+      # App code (remove these if you build the image instead of mounting the code)
       - ./src:/app/src
       - ./html:/app/html
       - ./css:/app/css
       - ./server.js:/app/server.js
       - ./index.html:/app/index.html
+      # LEGACY (one-time import): if you used the old ./conf and ./uploads folders,
+      # keep these two lines for the first start; the server copies missing files
+      # into ./data. Afterwards you can delete both lines.
+      - ./conf:/app/conf:ro
+      - ./uploads:/app/uploads:ro
     env_file:
       - .env
     environment:
       - NODE_ENV=production
       - PORT=8080
+      - DATA_DIR=/data
 
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:8080/index.html').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]

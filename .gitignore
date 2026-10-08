@@ -4,3 +4,5 @@ conf/accounts.json
 conf/tokens.json
 conf/
 uploads/
+
+data/

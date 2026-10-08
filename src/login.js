@@ -1,28 +1,26 @@
-document.getElementById('login-form').addEventListener('submit', async function(event) {
-    event.preventDefault();
+// Shows the result of a Twitch login attempt and skips the page if already signed in.
+(async function () {
+    const params = new URLSearchParams(location.search);
+    const status = params.get('status');
+    const user   = params.get('user') || 'your account';
+    const box    = document.getElementById('login-notice');
 
-    const username = document.getElementById('username').value;
-    const password = document.getElementById('password').value;
-    const messageElement = document.getElementById('login-message');
+    const notices = {
+        pending:   ['pending', `Hi ${user}! Your login request was sent. An administrator has to approve it before you get access — please try again later.`],
+        denied:    ['denied',  `Sorry ${user}, you don't have access to this page.`],
+        cancelled: ['info',    'Login cancelled.'],
+        error:     ['error',   'Twitch login failed. Please try again.'],
+        loggedout: ['info',    'You have been logged out.'],
+    };
+    if (status && notices[status]) {
+        box.className = 'login-notice login-notice--' + notices[status][0];
+        box.textContent = notices[status][1];
+        box.hidden = false;
+        return;
+    }
 
     try {
-        const response = await fetch('../conf/accounts.json');
-        const data = await response.json();
-        const account = data.accounts.find(acc => acc.username === username && acc.password === password);
-
-        if (account) {
-            sessionStorage.setItem('account', JSON.stringify(account));
-            window.location.href = '../html/config.html';
-            messageElement.textContent = `there seems to be a redirection issue, please contact the administrator.`;
-            messageElement.style.color = 'orange';
-        }
-        else {
-            messageElement.textContent = 'Invalid username or password.';
-            messageElement.style.color = 'red';
-        }
-    } catch (error) {
-        console.error('Error fetching accounts:', error);
-        messageElement.textContent = 'An error occurred. Please try again later.';
-        messageElement.style.color = 'red';
-    }
-});
+        const res = await fetch('/api/me', { credentials: 'same-origin' });
+        if (res.ok) location.replace('/html/config.html');
+    } catch { /* stay on the login page */ }
+})();

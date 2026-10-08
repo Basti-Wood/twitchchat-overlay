@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chat Overlay — Config</title>
     <link rel="stylesheet" href="../css/stylesheet.css">
+    <script src="../src/auth.js" defer></script>
 </head>
 <body class="config-page">
 
@@ -31,6 +32,11 @@
             </svg>
             Save Config
         </button>
+        <div class="topbar-actions">
+            <div class="user-chip" id="user-chip" hidden><img alt=""><span></span></div>
+            <a class="btn-ghost" id="admin-link" href="admin.html" hidden>Admin</a>
+            <button class="btn-ghost" onclick="logout()">Logout</button>
+        </div>
     </div>
 
     <!-- ── Main ── -->

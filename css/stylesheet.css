@@ -601,68 +601,113 @@ body.config-page {
     border-color: #e05a5a;
 }
 
-/* ── Login page ───────────────────────────────────────────── */
-.Login {
-
+/* ── Login page (Twitch) ──────────────────────────────────── */
+body.login-page {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: inherit;
+    background: radial-gradient(circle at 20% 15%, #3b2a6b 0%, #24203a 45%, #17141f 100%);
+    color: #e9e3ff;
 }
 
-/* ── Login Page Styling ───────────────────────────────── */
 .login-container {
-    max-width: 400px;
-    margin-left: 50%;
-    margin-top: 20%;
-    padding: 20px;
-    background: #1b0c3b;
-    border-radius: 8px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    width: min(420px, 92vw);
+    padding: 36px 32px;
+    background: rgba(27, 12, 59, 0.85);
+    border: 1px solid #2a1f50;
+    border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
     text-align: center;
 }
 
-.login-container h1 {
-    margin-bottom: 20px;
-    font-size: 24px;
-    color: #e3d5d5;
-}
+.login-container .login-logo { color: #9146ff; margin-bottom: 8px; }
+.login-container h1 { margin: 0 0 6px; font-size: 1.5em; color: #fff; }
+.login-container p.sub { margin: 0 0 24px; color: #b9aedd; font-size: 0.95em; }
 
-.login-container label {
-    display: block;
-    margin: 10px 0 5px;
-    font-weight: bold;
-    color: #d5e2e2;
-}
-
-.login-container input {
+.btn-twitch {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
     width: 100%;
-    padding: 10px;
-    margin-bottom: 15px;
-    border: 1px solid #111d3d;
-    background-color: #203161;
-    border-radius: 4px;
-    font-size: 16px;
-    color : white;
-}
-
-.login-container button {
-    width: 100%;
-    padding: 10px;
-    background: #5a0fbd;
-    color: white;
+    box-sizing: border-box;
+    padding: 13px 16px;
+    background: #9146ff;
+    color: #fff;
     border: none;
-    border-radius: 4px;
-    font-size: 16px;
+    border-radius: 10px;
+    font-size: 1em;
+    font-weight: 600;
+    font-family: inherit;
+    text-decoration: none;
     cursor: pointer;
-    transition: background 0.3s;
+    transition: background 0.15s, transform 0.1s;
 }
+.btn-twitch:hover  { background: #7b2fff; }
+.btn-twitch:active { transform: scale(0.98); }
 
-.login-container button:hover {
-    background: #0056b3;
+.login-notice {
+    margin: 0 0 20px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    font-size: 0.92em;
+    text-align: left;
+    line-height: 1.4;
 }
+.login-notice--pending { background: rgba(255, 183, 77, 0.12); border: 1px solid #ffb74d; color: #ffd9a0; }
+.login-notice--denied,
+.login-notice--error   { background: rgba(224, 90, 90, 0.12); border: 1px solid #e05a5a; color: #ffb3b3; }
+.login-notice--info    { background: rgba(145, 70, 255, 0.12); border: 1px solid #9146ff; color: #d8c6ff; }
 
-#login-message {
-    margin-top: 15px;
-    font-size: 14px;
+/* ── Top bar: user chip + admin ───────────────────────────── */
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+.user-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px 4px 4px;
+    border-radius: 999px;
+    background: #1d1840;
+    border: 1px solid #2a1f50;
+    color: #e0d4ff;
+    font-size: 0.88em;
 }
+.user-chip img { width: 28px; height: 28px; border-radius: 50%; background: #2a1f50; }
+.btn-ghost {
+    background: transparent;
+    border: 1px solid #3a2d70;
+    color: #c9b4ff;
+    border-radius: 8px;
+    padding: 9px 14px;
+    font-size: 0.85em;
+    font-weight: 600;
+    font-family: inherit;
+    text-decoration: none;
+    cursor: pointer;
+}
+.btn-ghost:hover { background: #2a1f50; }
 
+/* ── Admin page ───────────────────────────────────────────── */
+.admin-wrap { max-width: 1100px; margin: 0 auto; padding: 24px; color: #e0d4ff; }
+.admin-wrap h2 { margin: 24px 0 10px; font-size: 1.1em; color: #c9b4ff; }
+.admin-table { width: 100%; border-collapse: collapse; background: #13102a; border-radius: 10px; overflow: hidden; }
+.admin-table th, .admin-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #2a1f50; font-size: 0.9em; vertical-align: middle; }
+.admin-table th { background: #1d1840; color: #b9aedd; font-weight: 600; }
+.admin-table td.user-cell { display: flex; align-items: center; gap: 10px; }
+.admin-table td.user-cell img { width: 30px; height: 30px; border-radius: 50%; background: #2a1f50; }
+.admin-table input[type=text] { width: 130px; padding: 6px 8px; background: #203161; border: 1px solid #111d3d; border-radius: 6px; color: #fff; }
+.admin-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.admin-add { display: flex; gap: 8px; margin-bottom: 8px; }
+.admin-add input { flex: 1; max-width: 280px; padding: 9px 12px; background: #203161; border: 1px solid #111d3d; border-radius: 8px; color: #fff; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.78em; font-weight: 700; }
+.badge--approved { background: rgba(46, 204, 113, 0.18); color: #2ecc71; }
+.badge--pending  { background: rgba(255, 183, 77, 0.18); color: #ffb74d; }
+.badge--denied   { background: rgba(224, 90, 90, 0.18); color: #e05a5a; }
+.badge--admin    { background: rgba(145, 70, 255, 0.25); color: #c9b4ff; }
+#admin-message { min-height: 1.4em; margin: 8px 0; font-size: 0.9em; }
 /* ── TTS tab: sub-tabs ───────────────────────── */
 /* When the TTS tab is active, hide the middle chat preview and let the right
    panel expand to fill the space — prevents the panel from jumping sideways. */

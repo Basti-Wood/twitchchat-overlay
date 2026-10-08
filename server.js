@@ -35,14 +35,50 @@ const path = require('path');
 })();
 
 const { TTSManager } = require('./src/TTS.js');
+const { Auth }       = require('./src/auth-server.js');
 
 const PORT = Number(process.env.PORT) || 8080;
 const ROOT = __dirname;
+
+// All user data (uploads, config.json, users, tokens, TTS queue/audio) lives in
+// DATA_DIR, completely separate from the application files. Updating the app
+// (replacing server.js / src / html / css) never touches it.
+const DATA_DIR    = path.resolve(process.env.DATA_DIR || path.join(ROOT, 'data'));
+const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+const CONF_DIR    = path.join(DATA_DIR, 'conf');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function ensureDir(dir) {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+function copyMissing(src, dest) {
+    if (!fs.existsSync(src)) return 0;
+    let n = 0;
+    ensureDir(dest);
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+        const s = path.join(src, entry.name);
+        const d = path.join(dest, entry.name);
+        if (entry.isDirectory()) n += copyMissing(s, d);
+        else if (!fs.existsSync(d)) { fs.copyFileSync(s, d); n++; }
+    }
+    return n;
+}
+
+// One-time, non-destructive import of the legacy <app>/conf and <app>/uploads.
+ensureDir(UPLOADS_DIR);
+ensureDir(CONF_DIR);
+if (DATA_DIR !== ROOT) {
+    const moved = copyMissing(path.join(ROOT, 'conf'), CONF_DIR) + copyMissing(path.join(ROOT, 'uploads'), UPLOADS_DIR);
+    if (moved) console.log(`[data] copied ${moved} legacy file(s) into ${DATA_DIR}`);
+}
+console.log('[data] using data directory:', DATA_DIR);
+
+const auth = new Auth({ dataDir: DATA_DIR, rootDir: ROOT });
+if (!auth.configured) console.warn('[auth] TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET missing — nobody can log in!');
+if (!auth.adminLogins.length && !auth.list().some(u => u.role === 'admin')) {
+    console.warn('[auth] No administrator exists. Set ADMIN_TWITCH_LOGINS=<your twitch login> in .env.');
 }
 
 /** Strip characters that could cause path traversal or filesystem issues. */
@@ -55,12 +91,45 @@ function sendJSON(res, code, obj) {
     res.end(JSON.stringify(obj));
 }
 
+const MAX_JSON_BYTES   = 5 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
 function readBody(req) {
     return new Promise((resolve) => {
         let body = '';
-        req.on('data', c => { body += c; });
+        req.on('data', c => { if (body.length < MAX_JSON_BYTES) body += c; });
         req.on('end', () => resolve(body));
     });
+}
+
+/** Collect a binary upload; sends 413 and returns null when over the size cap. */
+function readUpload(req, res) {
+    return new Promise((resolve) => {
+        const chunks = [];
+        let size = 0;
+        let aborted = false;
+        req.on('data', chunk => {
+            if (aborted) return;
+            size += chunk.length;
+            if (size > MAX_UPLOAD_BYTES) {
+                aborted = true;
+                sendJSON(res, 413, { ok: false, error: 'File too large (max 25 MB)' });
+                resolve(null);
+                return;
+            }
+            chunks.push(chunk);
+        });
+        req.on('end', () => { if (!aborted) resolve(Buffer.concat(chunks)); });
+    });
+}
+
+const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.avif']);
+const FONT_EXT  = new Set(['.ttf', '.otf', '.woff', '.woff2']);
+
+function sameOrigin(req) {
+    const origin = req.headers.origin;
+    if (!origin) return true;
+    try { return new URL(origin).host === req.headers.host; } catch { return false; }
 }
 
 const MIME = {
@@ -96,7 +165,7 @@ function broadcast(channel, payload) {
 }
 
 // ── TTS manager: one engine (OAuth + EventSub + queue + settings) per user ──
-const tts = new TTSManager({ root: ROOT, broadcast });
+const tts = new TTSManager({ root: DATA_DIR, broadcast, getAccounts: () => auth.accounts() });
 tts.boot().catch(e => console.error('[tts] boot error:', e.message));
 
 const server = http.createServer(async (req, res) => {
@@ -112,6 +181,79 @@ const server = http.createServer(async (req, res) => {
 
     const urlObj = new URL(req.url, 'http://localhost');
     const pathname = urlObj.pathname;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  Auth (Twitch login, sessions, admin)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    if (req.method !== 'GET' && req.method !== 'HEAD' && !sameOrigin(req)) {
+        return sendJSON(res, 403, { ok: false, error: 'Cross-origin request blocked' });
+    }
+
+    /** Logged-in + approved user, or sends 401 and returns null. */
+    const requireUser = () => {
+        const u = auth.currentUser(req);
+        if (!u) sendJSON(res, 401, { ok: false, error: 'Not logged in' });
+        return u;
+    };
+    const requireAdmin = () => {
+        const u = requireUser();
+        if (u && u.role !== 'admin') { sendJSON(res, 403, { ok: false, error: 'Administrator only' }); return null; }
+        return u;
+    };
+    /** Channel the request may act on: own channel; admins may pick another via ?channel=. */
+    const resolveChannel = (u, wanted) => {
+        const own = auth.channelOf(u);
+        const w = String(wanted || '').toLowerCase().trim();
+        if (!w || w === own) return own;
+        if (u.role === 'admin') return w;
+        sendJSON(res, 403, { ok: false, error: 'You can only manage your own channel' });
+        return null;
+    };
+    /** Image folders a user may write to / delete from: <channel> and tts-gifs-<channel>. */
+    const imageDirAllowed = (u, dir) => {
+        if (u.role === 'admin') return true;
+        const own = auth.channelOf(u);
+        return dir === own || dir === 'tts-gifs-' + own;
+    };
+
+    if (req.method === 'GET' && pathname === '/auth/twitch/login') { auth.beginLogin(res); return; }
+    if (req.method === 'GET' && pathname === '/auth/twitch/callback') {
+        await auth.handleCallback(req, res, urlObj.searchParams);
+        return;
+    }
+    if (req.method === 'POST' && pathname === '/auth/logout') {
+        auth.destroySession(req, res);
+        return sendJSON(res, 200, { ok: true });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/me') {
+        const u = requireUser(); if (!u) return;
+        return sendJSON(res, 200, auth.me(u));
+    }
+    if (req.method === 'POST' && pathname === '/api/me/token') {
+        const u = requireUser(); if (!u) return;
+        let data; try { data = JSON.parse(await readBody(req)); } catch { return sendJSON(res, 400, { ok: false, error: 'Bad JSON' }); }
+        auth.setOwnToken(u.id, data.token);
+        return sendJSON(res, 200, { ok: true });
+    }
+
+    if (pathname === '/api/admin/users' && req.method === 'GET') {
+        const u = requireAdmin(); if (!u) return;
+        return sendJSON(res, 200, { ok: true, me: u.id, users: auth.list() });
+    }
+    if (pathname.startsWith('/api/admin/users') && req.method === 'POST') {
+        const admin = requireAdmin(); if (!admin) return;
+        let data; try { data = JSON.parse(await readBody(req)); } catch { return sendJSON(res, 400, { ok: false, error: 'Bad JSON' }); }
+        try {
+            res.once('finish', () => tts.syncAccess().catch(e => console.error('[tts] sync error:', e.message)));
+            if (pathname === '/api/admin/users')              return sendJSON(res, 200, { ok: true, user: auth.addByLogin(data.login) });
+            if (pathname === '/api/admin/users/update')       return sendJSON(res, 200, { ok: true, user: auth.update(data.id, data, admin.id) });
+            if (pathname === '/api/admin/users/delete')       { auth.remove(data.id, admin.id); return sendJSON(res, 200, { ok: true }); }
+        } catch (e) {
+            return sendJSON(res, 400, { ok: false, error: e.message });
+        }
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     //  TTS API
@@ -186,16 +328,20 @@ const server = http.createServer(async (req, res) => {
 
     // Config page tells overlays the appearance changed (live refresh)
     if (req.method === 'POST' && pathname === '/api/tts/appearance/notify') {
-        const ch = (urlObj.searchParams.get('channel') || '').toLowerCase().trim();
-        broadcast(ch || null, { type: 'appearance' });
+        const u = requireUser(); if (!u) return;
+        const ch = resolveChannel(u, urlObj.searchParams.get('channel')); if (!ch) return;
+        broadcast(ch, { type: 'appearance' });
         sendJSON(res, 200, { ok: true });
         return;
     }
 
     // ── Begin Twitch OAuth (redirect the browser to Twitch) ──────────────────
     if (req.method === 'GET' && pathname === '/api/tts/oauth/start') {
-        const eng = ttsEngine();
-        if (!eng) { res.writeHead(400); res.end('channel required (?channel=<name>)'); return; }
+        const u = auth.currentUser(req);
+        if (!u) { res.writeHead(302, { Location: '/index.html' }); res.end(); return; }
+        const ch = resolveChannel(u, urlObj.searchParams.get('channel')); if (!ch) return;
+        const eng = tts.resolveEngine(ch);
+        if (!eng) { res.writeHead(400); res.end('This channel has no TTS access'); return; }
         const url = eng.buildAuthUrl();
         if (!url) { res.writeHead(500); res.end('TWITCH_CLIENT_ID not configured in .env'); return; }
         res.writeHead(302, { Location: url });
@@ -205,8 +351,10 @@ const server = http.createServer(async (req, res) => {
 
     // ── Force EventSub reconnect (no OAuth needed if already authorized) ───────
     if (req.method === 'POST' && pathname === '/api/tts/eventsub/connect') {
-        const eng = ttsEngine();
-        if (!eng) return sendJSON(res, 400, { ok: false, error: 'channel required (?channel=<name>)' });
+        const u = requireUser(); if (!u) return;
+        const ch = resolveChannel(u, urlObj.searchParams.get('channel')); if (!ch) return;
+        const eng = tts.resolveEngine(ch);
+        if (!eng) return sendJSON(res, 400, { ok: false, error: 'This channel has no TTS access' });
         if (!eng.tokens || !eng.tokens.user_id) {
             sendJSON(res, 400, { ok: false, error: 'Not authorized — use the Connect Twitch button first.' });
             return;
@@ -218,8 +366,10 @@ const server = http.createServer(async (req, res) => {
 
     // ── List channel point rewards (for picking redeem IDs in the UI) ────────
     if (req.method === 'GET' && pathname === '/api/tts/rewards') {
-        const eng = ttsEngine();
-        if (!eng) return sendJSON(res, 400, { ok: false, error: 'channel required (?channel=<name>)' });
+        const u = requireUser(); if (!u) return;
+        const ch = resolveChannel(u, urlObj.searchParams.get('channel')); if (!ch) return;
+        const eng = tts.resolveEngine(ch);
+        if (!eng) return sendJSON(res, 400, { ok: false, error: 'This channel has no TTS access' });
         try {
             const rewards = await eng.listCustomRewards();
             sendJSON(res, 200, { ok: true, rewards });
@@ -248,44 +398,35 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    // ── Manual test / send (gated by account access) ─────────────────────────
-    //   POST body: { username, password, text, voice? }
+    // ── Manual test / send (logged-in user with TTS access) ──────────────────
+    //   POST body: { text, voice?, kind?, reward? }
     if (req.method === 'POST' && pathname === '/api/tts/test') {
+        const acc = requireUser(); if (!acc) return;
         const body = await readBody(req);
         let data;
         try { data = JSON.parse(body); } catch { return sendJSON(res, 400, { ok: false, error: 'Bad JSON' }); }
 
-        // Re-verify the account against accounts.json (don't trust the client).
-        const acc = tts.accounts.find(a => a.username === data.username && a.password === data.password);
-        if (!acc)              return sendJSON(res, 401, { ok: false, error: 'Invalid account' });
         if (!acc.ttsAccess)    return sendJSON(res, 403, { ok: false, error: 'This account does not have TTS access' });
-        if (!acc.channel)      return sendJSON(res, 400, { ok: false, error: 'Account has no channel set' });
         if (!data.text)        return sendJSON(res, 400, { ok: false, error: 'No text' });
 
         // The test always goes to the ACCOUNT's own channel engine.
-        const eng = tts.engineFor(acc.channel);
+        const eng = tts.engineFor(auth.channelOf(acc));
+        const userName = acc.displayName || acc.login;
         const kind = String(data.kind || 'manual').toLowerCase() === 'redeem' ? 'redeem' : 'manual';
         const meta = kind === 'redeem'
-            ? { kind: 'redeem', user: acc.username, reward: data.reward || 'Test Redeem', rewardId: 'test-redeem-single' }
-            : { kind: 'manual', user: acc.username };
+            ? { kind: 'redeem', user: userName, reward: data.reward || 'Test Redeem', rewardId: 'test-redeem-single' }
+            : { kind: 'manual', user: userName };
         eng.enqueue(data.text, data.voice, meta);
         sendJSON(res, 200, { ok: true, queueLength: eng.queue.length });
         return;
     }
 
-    // ── Test redeem set (gated by account access) ──────────────────────────
-    //   POST body: { username, password }
+    // ── Test redeem set (logged-in user with TTS access) ───────────────────
     if (req.method === 'POST' && pathname === '/api/tts/test-redeems') {
-        const body = await readBody(req);
-        let data;
-        try { data = JSON.parse(body); } catch { return sendJSON(res, 400, { ok: false, error: 'Bad JSON' }); }
-
-        const acc = tts.accounts.find(a => a.username === data.username && a.password === data.password);
-        if (!acc)           return sendJSON(res, 401, { ok: false, error: 'Invalid account' });
+        const acc = requireUser(); if (!acc) return;
         if (!acc.ttsAccess) return sendJSON(res, 403, { ok: false, error: 'This account does not have TTS access' });
-        if (!acc.channel)   return sendJSON(res, 400, { ok: false, error: 'Account has no channel set' });
 
-        const eng = tts.engineFor(acc.channel);
+        const eng = tts.engineFor(auth.channelOf(acc));
         const redeemVoice = (eng.config && eng.config.redeems && eng.config.redeems.voice) || '';
         const samples = [
             { user: 'Basti',  reward: 'TTS', message: '{Roger - Laid-Back, Casual, Resonant} Das ist ein Parser-Test mit strict braces.' },
@@ -316,16 +457,31 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    //  Existing config / upload API (unchanged)
+    //  Config / upload API (login required, limited to the user's own channel)
     // ═══════════════════════════════════════════════════════════════════════
 
     if (req.method === 'POST' && pathname === '/api/save-config') {
+        const u = requireUser(); if (!u) return;
         const body = await readBody(req);
         try {
-            JSON.parse(body);
-            fs.writeFileSync(path.join(ROOT, 'conf', 'config.json'), body, 'utf8');
+            const incoming = JSON.parse(body);
+            const ch = auth.channelOf(u);
+            const file = path.join(CONF_DIR, 'config.json');
+            let current = {};
+            try { current = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* first save */ }
+            if (!current.config)  current.config  = {};
+            if (!current.presets) current.presets = {};
+            const flatTts = current.tts && (current.tts.bits || current.tts.appearance || current.tts.defaultVoice !== undefined);
+            if (!current.tts || flatTts) current.tts = {};
+
+            // Only this user's own channel entries are taken from the request.
+            if (incoming.config  && incoming.config[ch]  !== undefined) current.config[ch]  = incoming.config[ch];
+            if (incoming.presets && incoming.presets[ch] !== undefined) current.presets[ch] = incoming.presets[ch];
+            if (incoming.tts     && incoming.tts[ch]     !== undefined && u.ttsAccess) current.tts[ch] = incoming.tts[ch];
+
+            fs.writeFileSync(file, JSON.stringify(current, null, 4), 'utf8');
             sendJSON(res, 200, { ok: true });
-            console.log('[save-config] config.json updated');
+            console.log(`[save-config] ${ch} saved by ${u.login}`);
         } catch (e) {
             console.error('[save-config] error:', e.message);
             sendJSON(res, 500, { ok: false, error: e.message });
@@ -334,37 +490,34 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && pathname === '/api/upload/image') {
+        const u = requireUser(); if (!u) return;
         const channel  = sanitizeName((urlObj.searchParams.get('channel') || 'default').toLowerCase());
+        if (!imageDirAllowed(u, channel)) return sendJSON(res, 403, { ok: false, error: 'You can only upload to your own channel' });
         const filename = sanitizeName(decodeURIComponent(req.headers['x-filename'] || 'image.png'));
-        const dir      = path.join(ROOT, 'uploads', 'images', channel);
-        ensureDir(dir);
-        const target = path.join(dir, filename);
-        const chunks = [];
-        req.on('data', chunk => chunks.push(chunk));
-        req.on('end', () => {
-            try {
-                fs.writeFileSync(target, Buffer.concat(chunks));
-                const urlPath = `/uploads/images/${channel}/${filename}`;
-                sendJSON(res, 200, { ok: true, url: urlPath });
-                console.log('[upload] image saved:', urlPath);
-            } catch (e) {
-                sendJSON(res, 500, { ok: false, error: e.message });
-            }
-        });
+        if (!IMAGE_EXT.has(path.extname(filename).toLowerCase())) return sendJSON(res, 400, { ok: false, error: 'Unsupported image type' });
+        const data = await readUpload(req, res); if (!data) return;
+        try {
+            const dir = path.join(UPLOADS_DIR, 'images', channel);
+            ensureDir(dir);
+            fs.writeFileSync(path.join(dir, filename), data);
+            const urlPath = `/uploads/images/${channel}/${filename}`;
+            sendJSON(res, 200, { ok: true, url: urlPath });
+            console.log('[upload] image saved:', urlPath);
+        } catch (e) {
+            sendJSON(res, 500, { ok: false, error: e.message });
+        }
         return;
     }
 
     if (req.method === 'POST' && pathname === '/api/delete/image') {
+        const u = requireUser(); if (!u) return;
         const body = await readBody(req);
         try {
             const { url } = JSON.parse(body);
-            if (!url || !url.startsWith('/uploads/images/')) {
-                return sendJSON(res, 400, { ok: false, error: 'Invalid path' });
-            }
-            const target = path.normalize(path.join(ROOT, url));
-            if (!target.startsWith(path.join(ROOT, 'uploads', 'images'))) {
-                return sendJSON(res, 403, { ok: false, error: 'Forbidden' });
-            }
+            const m = /^\/uploads\/images\/([^/]+)\/([^/]+)$/.exec(url || '');
+            if (!m) return sendJSON(res, 400, { ok: false, error: 'Invalid path' });
+            if (!imageDirAllowed(u, m[1])) return sendJSON(res, 403, { ok: false, error: 'Forbidden' });
+            const target = path.join(UPLOADS_DIR, 'images', sanitizeName(m[1]), sanitizeName(m[2]));
             if (fs.existsSync(target)) fs.unlinkSync(target);
             sendJSON(res, 200, { ok: true });
             console.log('[delete] image removed:', url);
@@ -375,33 +528,50 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && pathname === '/api/upload/font') {
+        const u = requireUser(); if (!u) return;
         const filename = sanitizeName(decodeURIComponent(req.headers['x-filename'] || 'font.ttf'));
-        const dir      = path.join(ROOT, 'uploads', 'fonts');
-        ensureDir(dir);
-        const target = path.join(dir, filename);
-        const chunks = [];
-        req.on('data', chunk => chunks.push(chunk));
-        req.on('end', () => {
-            try {
-                fs.writeFileSync(target, Buffer.concat(chunks));
-                const urlPath = `/uploads/fonts/${filename}`;
-                sendJSON(res, 200, { ok: true, url: urlPath });
-                console.log('[upload] font saved:', urlPath);
-            } catch (e) {
-                sendJSON(res, 500, { ok: false, error: e.message });
-            }
-        });
+        if (!FONT_EXT.has(path.extname(filename).toLowerCase())) return sendJSON(res, 400, { ok: false, error: 'Unsupported font type' });
+        const data = await readUpload(req, res); if (!data) return;
+        try {
+            const dir = path.join(UPLOADS_DIR, 'fonts');
+            ensureDir(dir);
+            fs.writeFileSync(path.join(dir, filename), data);
+            const urlPath = `/uploads/fonts/${filename}`;
+            sendJSON(res, 200, { ok: true, url: urlPath });
+            console.log('[upload] font saved:', urlPath);
+        } catch (e) {
+            sendJSON(res, 500, { ok: false, error: e.message });
+        }
         return;
     }
 
-    // ── Static file serving ──────────────────────────────────────────────────
+    // ── Static file serving (explicit whitelist) ─────────────────────────────
+    //   /uploads/**         -> <DATA_DIR>/uploads   (public: OBS overlays load these)
+    //   /conf/config.json   -> <DATA_DIR>/conf      (public: the overlay reads its style)
+    //   /index.html, /html, /css, /src -> app files
+    //   everything else (users.json, tokens, .env, server.js, ...) is NOT served.
     let urlPath = pathname;
     if (urlPath === '/') urlPath = '/index.html';
+    if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); res.end(); return; }
 
-    const filePath = path.normalize(path.join(ROOT, urlPath));
-    if (!filePath.startsWith(ROOT + path.sep) && filePath !== ROOT) {
-        res.writeHead(403);
-        res.end('Forbidden');
+    let baseDir = null;
+    if (urlPath.startsWith('/uploads/'))         baseDir = UPLOADS_DIR;
+    else if (urlPath === '/conf/config.json')    baseDir = CONF_DIR;
+    else if (urlPath === '/index.html' || /^\/(html|css|src)\//.test(urlPath)) baseDir = ROOT;
+
+    let decoded = urlPath;
+    try { decoded = decodeURIComponent(urlPath); } catch { /* keep raw */ }
+    let filePath = null;
+    if (baseDir) {
+        const rel = baseDir === UPLOADS_DIR ? decoded.slice('/uploads/'.length)
+                  : baseDir === CONF_DIR    ? 'config.json'
+                  : decoded.slice(1);
+        filePath = path.normalize(path.join(baseDir, rel));
+        if (!filePath.startsWith(baseDir + path.sep) || (baseDir === ROOT && /(^|[\\/])auth-server\.js$/.test(filePath))) filePath = null;
+    }
+    if (!filePath) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not found: ' + urlPath);
         return;
     }
 
@@ -412,11 +582,13 @@ const server = http.createServer(async (req, res) => {
             return;
         }
         const ext = path.extname(filePath).toLowerCase();
-        res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+        const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff' };
+        // Uploaded files are user content: never let them run scripts (e.g. SVG).
+        if (baseDir === UPLOADS_DIR) headers['Content-Security-Policy'] = 'sandbox';
+        res.writeHead(200, headers);
         res.end(data);
     });
 });
-
 server.on('error', (e) => {
     if (e.code === 'EADDRINUSE') {
         console.error(`\n  Port ${PORT} is already in use — the server is probably already running.`);

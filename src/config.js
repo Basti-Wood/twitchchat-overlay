@@ -581,7 +581,8 @@ function setupControls() {
 }
 
 // ── Init ──────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    await window.authReady;
     const stored = sessionStorage.getItem('account');
     if (stored) {
         const account = JSON.parse(stored);
@@ -601,6 +602,13 @@ document.addEventListener('DOMContentLoaded', () => {
     updatePreviewSrc();
     document.getElementById('channel-input').addEventListener('change', updatePreviewSrc);
     document.getElementById('token-input').addEventListener('change', updatePreviewSrc);
+    document.getElementById('token-input').addEventListener('change', (e) => {
+        fetch('/api/me/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: e.target.value.trim() }),
+        }).catch(() => {});
+    });
 });
 // ── Update preview iframe src with current channel + token ───
 function updatePreviewSrc() {
@@ -1363,8 +1371,6 @@ function ttsWireControls() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    username: acc.username,
-                    password: acc.password,
                     text,
                     kind: 'redeem',
                     reward: 'Test Redeem',
@@ -1387,7 +1393,7 @@ function ttsWireControls() {
             const res = await fetch('/api/tts/test-redeems', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username: acc.username, password: acc.password }),
+                body: JSON.stringify({}),
             });
             const data = await res.json();
             if (data.ok) result.textContent = `Queued ${data.added} redeem tests ✓ (queue length ${data.queueLength}). Audio plays on the redeem overlay page.`;
@@ -1460,6 +1466,7 @@ function ttsRemoveUiForNoAccess() {
 
 // ── Init the TTS tab once the DOM is ready ───────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
+    await window.authReady;
     if (!ttsEl('tab-tts')) return;
     if (!ttsAccountHasAccess()) {
         // No TTS access → remove the tab button and its content entirely.

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Overlay — Admin</title>
+    <link rel="stylesheet" href="../css/stylesheet.css">
+    <script src="../src/auth.js" defer></script>
+    <script src="../src/admin.js" defer></script>
+</head>
+<body class="config-page" style="display:block">
+    <div class="topbar">
+        <div class="topbar-title">Twitch Chat Overlay — Administration</div>
+        <div class="topbar-actions">
+            <div class="user-chip" id="user-chip" hidden><img alt=""><span></span></div>
+            <a class="btn-ghost" href="config.html">Back to config</a>
+            <button class="btn-ghost" onclick="logout()">Logout</button>
+        </div>
+    </div>
+
+    <div class="admin-wrap">
+        <div id="admin-message"></div>
+
+        <h2>Allow a Twitch user</h2>
+        <form class="admin-add" id="add-form">
+            <input type="text" id="add-login" placeholder="twitch login name" autocomplete="off" required>
+            <button class="btn-copy" type="submit">Add &amp; approve</button>
+        </form>
+
+        <h2>Pending requests</h2>
+        <table class="admin-table" id="pending-table"><tbody></tbody></table>
+
+        <h2>Users</h2>
+        <table class="admin-table" id="users-table">
+            <thead>
+                <tr><th>User</th><th>Status</th><th>Role</th><th>Channel</th><th>TTS</th><th>Last login</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</body>
+</html>

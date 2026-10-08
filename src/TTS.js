@@ -147,8 +147,7 @@ class TTSEngine {
     }
 
     get accounts() {
-        const a = readJSON(path.join(this.confDir, 'accounts.json'), { accounts: [] });
-        return Array.isArray(a.accounts) ? a.accounts : [];
+        return this.manager ? this.manager.accounts : [];
     }
 
     // Look up a voice name from an id (for nicer history/queue display).
@@ -291,7 +290,18 @@ class TTSEngine {
     //  EventSub over WebSocket
     // ───────────────────────────────────────────────────────────────────────
 
+    /** Disconnect EventSub and stay offline (TTS access was revoked). */
+    stop() {
+        this.stopped = true;
+        this.reconnecting = false;
+        const ws = this.ws;
+        this.ws = null;
+        this.sessionId = null;
+        if (ws) { try { ws.close(); } catch {} }
+    }
+
     async startEventSub() {
+        if (this.stopped) return;
         if (!this.tokens || !this.tokens.user_id) {
             warn('startEventSub: no user token yet — visit the authorize link first.');
             return;
@@ -985,8 +995,9 @@ class TTSManager {
      * @param {string} opts.root        project root dir
      * @param {function} opts.broadcast (channel, payload) => void — SSE push
      */
-    constructor({ root, broadcast }) {
+    constructor({ root, broadcast, getAccounts }) {
         this.root      = root;
+        this._getAccounts = getAccounts || (() => []);
         this.confDir   = path.join(root, 'conf');
         this.broadcastAll = broadcast || (() => {});
         this.elevenKey = (process.env.ELEVENLABS_API_KEY || '').trim();
@@ -995,8 +1006,8 @@ class TTSManager {
     }
 
     get accounts() {
-        const a = readJSON(path.join(this.confDir, 'accounts.json'), { accounts: [] });
-        return Array.isArray(a.accounts) ? a.accounts : [];
+        const a = this._getAccounts();
+        return Array.isArray(a) ? a : [];
     }
 
     /** Channels (lowercase) that are allowed to use TTS. */
@@ -1118,10 +1129,24 @@ class TTSManager {
             if (t.unref) t.unref();
         }
 
-        const chans = this.ttsChannels();
-        if (!chans.length) { log('no accounts with ttsAccess — TTS idle.'); return; }
-        for (const ch of chans) {
+        if (!this.ttsChannels().length) log('no accounts with ttsAccess — TTS idle.');
+        await this.syncAccess();
+    }
+
+    /** Start engines for channels that gained TTS access, stop those that lost it. */
+    async syncAccess() {
+        const allowed = new Set(this.ttsChannels());
+        for (const [ch, eng] of this.engines) {
+            if (!allowed.has(ch) && eng.booted && !eng.stopped) {
+                eng.stop();
+                log(`[${ch}] TTS access revoked — stopped.`);
+            }
+        }
+        for (const ch of allowed) {
             const eng = this.engineFor(ch);
+            if (eng.booted && !eng.stopped) continue;
+            eng.stopped = false;
+            eng.booted = true;
             await eng.boot().catch(e => warn(`[${ch}] boot error:`, e.message));
         }
     }
