@@ -18,6 +18,11 @@ const DEFAULT_CONFIG = {
     slideDirection:         'right',
     bubbleImages:           [],
     customCSS:              '',
+    voteOpacity:            0.45,
+    voteColors:             [
+        '#3b82f6', '#ef4444', '#22c55e', '#eab308', '#a855f7',
+        '#f97316', '#06b6d4', '#ec4899', '#84cc16', '#94a3b8',
+    ],
 };
 
 let currentConfig = { ...DEFAULT_CONFIG };
@@ -124,6 +129,16 @@ function applyToPreview() {
     }
     configStyleEl.textContent = cssToInject;
 
+    // Prediction vote layer colors live in their own style so custom CSS doesn't drop them
+    let voteStyleEl = doc.getElementById('vote-css');
+    if (!voteStyleEl) {
+        voteStyleEl = doc.createElement('style');
+        voteStyleEl.id = 'vote-css';
+        doc.head.appendChild(voteStyleEl);
+    }
+    voteStyleEl.textContent = currentConfig.voteColors.map((hex, i) =>
+        `.message-box[data-vote="${i}"]::before { background: ${hexToRgba(hex, currentConfig.voteOpacity)}; }`
+    ).join('\n');
     // Background images must be applied per-element (random pick from array)
     const imgs = currentConfig.bubbleImages;
     doc.querySelectorAll('.message-box').forEach(el => {
@@ -159,11 +174,29 @@ function injectDemoMessages() {
     if (!chat) return;
 
     const dir = currentConfig.slideDirection || 'right';
+    const emote = id => `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0`;
     const demos = [
         { nick: 'Du', color: '#e91916', text: "Welcome to the stream! Let's go! \uD83C\uDF89" },
         { nick: 'Dein lieblings viewer', color: '#9146ff', text: 'This chat overlay looks amazing! \u2728' },
-        { nick: 'Ein Mod',    color: '#1db954', text: "Pog Pog Pog! Let's get it! \uD83D\uDE80" },
+        { nick: 'Ein Mod', color: '#1db954', text: "Pog Pog Pog! Let's get it! \uD83D\uDE80" },
+        { nick: 'EmoteSpammer', color: '#ff7f50', emotes: [emote(25), emote(25), emote(25)] },
+        { nick: 'Textwall', color: '#1e90ff', text: 'This is a much longer message to show how the bubble wraps when someone writes a whole paragraph in chat, including a bit of rambling about the stream, the game, and what they had for lunch today.' },
+        { nick: 'Mixed', color: '#daa520', text: 'Nice play', emotes: [emote(25)] },
+        ...Array.from({ length: 10 }, (_, i) => ({
+            nick: `Voter ${i + 1}`,
+            color: '#8a8a8a',
+            text: `I voted for outcome ${i + 1}!`,
+            vote: i,
+        })),
     ];
+
+    // Preview-only: top-aligned and scrollable so all demo messages are reachable
+    if (!doc.getElementById('demo-layout-css')) {
+        const s = doc.createElement('style');
+        s.id = 'demo-layout-css';
+        s.textContent = '.chat { justify-content: flex-start !important; overflow-y: auto !important; }';
+        doc.head.appendChild(s);
+    }
 
     chat.innerHTML = '';
     demos.forEach(msg => {
@@ -181,9 +214,15 @@ function injectDemoMessages() {
         usernameRow.appendChild(nameSpan);
 
         const msgBox = doc.createElement('div');
-        msgBox.className = 'message-box';
-        msgBox.textContent = msg.text;
-
+        msgBox.className = 'message-box' + (msg.emotes && !msg.text ? ' emote-only' : '');
+        if (msg.vote !== undefined) msgBox.dataset.vote = String(msg.vote);
+        if (msg.text) msgBox.appendChild(doc.createTextNode(msg.text + (msg.emotes ? ' ' : '')));
+        (msg.emotes || []).forEach(src => {
+            const img = doc.createElement('img');
+            img.className = 'emote';
+            img.src = src;
+            msgBox.appendChild(img);
+        });
         row.appendChild(usernameRow);
         row.appendChild(msgBox);
         chat.appendChild(row);
@@ -305,6 +344,11 @@ function populateForm() {
     document.getElementById('cfg-bubble-color').value   = currentConfig.bubbleColor;
     document.getElementById('cfg-bubble-opacity').value = currentConfig.bubbleOpacity;
     document.getElementById('cfg-opacity-val').textContent = Number(currentConfig.bubbleOpacity).toFixed(2);
+    document.getElementById('cfg-vote-opacity').value = currentConfig.voteOpacity;
+    document.getElementById('cfg-vote-opacity-val').textContent = Number(currentConfig.voteOpacity).toFixed(2);
+    document.querySelectorAll('.cfg-vote-color').forEach(inp => {
+        inp.value = currentConfig.voteColors[Number(inp.dataset.idx)];
+    });
     document.getElementById('cfg-name-ml').value        = currentConfig.nameBubbleMarginLeft;
     document.getElementById('cfg-name-mb').value        = currentConfig.nameBubbleMarginBottom;
     document.getElementById('cfg-msg-ml').value         = currentConfig.msgBubbleMarginLeft;
@@ -456,6 +500,20 @@ function setupControls() {
         currentConfig.bubbleOpacity = parseFloat(e.target.value);
         document.getElementById('cfg-opacity-val').textContent = currentConfig.bubbleOpacity.toFixed(2);
         saveConfig();
+    });
+
+    document.getElementById('cfg-vote-opacity').addEventListener('input', e => {
+        currentConfig.voteOpacity = parseFloat(e.target.value);
+        document.getElementById('cfg-vote-opacity-val').textContent = currentConfig.voteOpacity.toFixed(2);
+        saveConfig(true);
+    });
+
+    document.querySelectorAll('.cfg-vote-color').forEach(inp => {
+        inp.addEventListener('input', e => {
+            currentConfig.voteColors = [...currentConfig.voteColors];
+            currentConfig.voteColors[Number(e.target.dataset.idx)] = e.target.value;
+            saveConfig(true);
+        });
     });
 
     document.getElementById('cfg-bubble-image').addEventListener('change', async e => {

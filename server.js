@@ -395,6 +395,13 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // Current prediction votes (overlay polls this to color chat bubbles)
+    if (req.method === 'GET' && pathname === '/api/prediction') {
+        const eng = ttsEngine();
+        sendJSON(res, 200, eng ? eng.prediction : { active: false, votes: {} });
+        return;
+    }
+
     // Recent requests for the config "Queue" view
     if (req.method === 'GET' && pathname === '/api/tts/queue') {
         const eng = ttsEngine();

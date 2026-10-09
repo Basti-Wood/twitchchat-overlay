@@ -104,6 +104,20 @@ body {
     backdrop-filter: blur(4px);
     min-width: 280px;
     margin-left: 20px;
+    position: relative;
+    isolation: isolate;
+}
+
+/* Prediction vote layer: between the bubble background and the text.
+   Transparent until a vote color is set via .message-box[data-vote]. */
+.message-box::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: transparent;
+    pointer-events: none;
+    z-index: -1;
 }
 
 .emote {

@@ -26,7 +26,8 @@ const ELEVEN_API   = 'https://api.elevenlabs.io/v1';
 //   bits         → bits:read
 //   resubs       → channel:read:subscriptions
 //   point redeem → channel:read:redemptions
-const SCOPES = ['bits:read', 'channel:read:subscriptions', 'channel:read:redemptions'];
+//   predictions  → channel:read:predictions (chat bubble vote colors)
+const SCOPES = ['bits:read', 'channel:read:subscriptions', 'channel:read:redemptions', 'channel:read:predictions'];
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Small helpers
@@ -96,6 +97,9 @@ class TTSEngine {
         this.sessionId     = null;
         this.keepaliveSecs = 30;
         this.reconnecting  = false;
+
+        // ── Current prediction: votes maps user login → outcome index (0-9) ──
+        this.prediction = { active: false, id: null, votes: {} };
 
         // ── Voice cache — shared across all engines via the manager ──
         this._voices = []; // only used when running without a manager
@@ -416,7 +420,11 @@ class TTSEngine {
             { type: 'channel.cheer',                          version: '1', condition: { broadcaster_user_id: uid } },
             { type: 'channel.subscription.message',           version: '1', condition: { broadcaster_user_id: uid } },
             { type: 'channel.channel_points_custom_reward_redemption.add', version: '1', condition: { broadcaster_user_id: uid } },
-        ];
+                        { type: 'channel.prediction.begin',    version: '1', condition: { broadcaster_user_id: uid } },
+                        { type: 'channel.prediction.progress', version: '1', condition: { broadcaster_user_id: uid } },
+                        { type: 'channel.prediction.lock',     version: '1', condition: { broadcaster_user_id: uid } },
+                        { type: 'channel.prediction.end',      version: '1', condition: { broadcaster_user_id: uid } },
+                    ];
 
         for (const s of subs) {
             try {
@@ -441,7 +449,28 @@ class TTSEngine {
     //  Event → TTS decision (threshold gating)
     // ───────────────────────────────────────────────────────────────────────
 
+    // Twitch only reveals voters through top_predictors (top 10 per outcome).
+    _handlePrediction(subType, event) {
+        if (subType === 'channel.prediction.end') {
+            this.prediction = { active: false, id: null, votes: {} };
+            return;
+        }
+        if (this.prediction.id !== event.id) {
+            this.prediction = { active: true, id: event.id, votes: {} };
+        }
+        const outcomes = event.outcomes || [];
+        outcomes.forEach((o, idx) => {
+            (o.top_predictors || []).forEach(p => {
+                if (p.user_login) this.prediction.votes[p.user_login.toLowerCase()] = idx;
+            });
+        });
+    }
+
     _handleNotification(subType, event) {
+        if (subType.startsWith('channel.prediction.')) {
+            this._handlePrediction(subType, event);
+            return;
+        }
         const cfg = this.config;
 
         if (subType === 'channel.cheer') {

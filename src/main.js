@@ -2,6 +2,8 @@
 const params = new URLSearchParams(window.location.search);
 const channel    = (params.get('channel') || '').toLowerCase();
 
+const isPreview = window.self !== window.top; // embedded in the config page
+
 const chatContainer = document.querySelector('.chat');
 const MAX_MESSAGES_DEFAULT = 10;
 let   maxMessages          = MAX_MESSAGES_DEFAULT; // configurable via conf/config.json
@@ -340,6 +342,34 @@ function clearUserMessages(loginName) {
         .forEach(el => el.remove());
 }
 
+const DEFAULT_VOTE_COLORS = [
+    '#3b82f6', '#ef4444', '#22c55e', '#eab308', '#a855f7',
+    '#f97316', '#06b6d4', '#ec4899', '#84cc16', '#94a3b8',
+];
+const DEFAULT_VOTE_OPACITY = 0.45;
+
+// login -> outcome index, refreshed from /api/prediction
+let predictionVotes = {};
+
+function applyVote(row) {
+    if (isPreview) return; // preview shows demo votes set by the config page
+    const box = row.querySelector('.message-box');
+    if (!box) return;
+    const idx = predictionVotes[row.dataset.user];
+    if (idx === undefined) delete box.dataset.vote;
+    else box.dataset.vote = String(idx);
+}
+
+async function pollPrediction() {
+    try {
+        const res = await fetch(`/api/prediction?channel=${encodeURIComponent(channel)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        predictionVotes = data.active ? (data.votes || {}) : {};
+        chatContainer.querySelectorAll('.chat-message').forEach(applyVote);
+    } catch { /* server unreachable — keep last state */ }
+}
+
 function addMessage(msg) {
     const row = document.createElement('div');
     row.className = `chat-message slide-in-${overlaySlideDirection}`;
@@ -377,6 +407,7 @@ function addMessage(msg) {
 
     row.appendChild(usernameRow);
     row.appendChild(msgBox);
+    applyVote(row);
     chatContainer.appendChild(row);
 
     while (chatContainer.children.length > maxMessages) {
@@ -413,9 +444,8 @@ async function loadConfigFile() {
 // === Overlay style config ===
 function applyOverlayConfig() {
     const raw = localStorage.getItem('overlayConfig_' + channel);
-    if (!raw) return;
-    let cfg;
-    try { cfg = JSON.parse(raw); } catch { return; }
+    let cfg = {};
+    if (raw) { try { cfg = JSON.parse(raw); } catch { return; } }
 
     // Update slide direction and bubble images for future messages
     overlaySlideDirection = cfg.slideDirection || 'right';
@@ -425,6 +455,16 @@ function applyOverlayConfig() {
     }
 
     let css = '';
+
+    const voteColors  = Array.isArray(cfg.voteColors) ? cfg.voteColors : DEFAULT_VOTE_COLORS;
+    const voteOpacity = cfg.voteOpacity ?? DEFAULT_VOTE_OPACITY;
+    DEFAULT_VOTE_COLORS.forEach((def, i) => {
+        const hex = /^#[0-9a-fA-F]{6}$/.test(voteColors[i]) ? voteColors[i] : def;
+        const r = parseInt(hex.slice(1, 3), 16);
+        const g = parseInt(hex.slice(3, 5), 16);
+        const b = parseInt(hex.slice(5, 7), 16);
+        css += `.message-box[data-vote="${i}"]::before { background: rgba(${r},${g},${b},${voteOpacity}); }\n`;
+    });
 
     if (cfg.bubbleColor) {
         const r = parseInt(cfg.bubbleColor.slice(1, 3), 16);
@@ -490,14 +530,22 @@ async function init() {
         return;
     }
 
-    await loadConfigFile();
-    applyOverlayConfig();
-    // Poll every 3 s: re-fetch config.json so OBS always gets the latest saved config
-    // (OBS localStorage is isolated from the config-page browser, so the file is the bridge)
-    setInterval(async () => {
+    if (isPreview) {
+        // Inside the config page: the unsaved localStorage config is the source of truth.
+        // Re-fetching config.json here would overwrite live edits with the saved version.
+        applyOverlayConfig();
+        window.addEventListener('storage', applyOverlayConfig);
+        setInterval(applyOverlayConfig, 300);
+    } else {
         await loadConfigFile();
         applyOverlayConfig();
-    }, 3000);
+        // Poll every 3 s: re-fetch config.json so OBS always gets the latest saved config
+        // (OBS localStorage is isolated from the config-page browser, so the file is the bridge)
+        setInterval(async () => {
+            await loadConfigFile();
+            applyOverlayConfig();
+        }, 3000);
+    }
     await Promise.allSettled([
         loadBadgesFromServer(null), // global badges
         loadBTTVGlobal(),
@@ -505,6 +553,9 @@ async function init() {
         loadFFZChannel(channel),
         load7TVGlobal(),
     ]);
+
+    pollPrediction();
+    setInterval(pollPrediction, 2000);
 
     connect();
 }
